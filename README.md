@@ -1,2 +1,5 @@
 # snortRuleParser
-Parses Snort rules from a rule file, puts conent in a struct and ev. prints it.
+
+UNDER CONSTRUCTION
+
+Parses Snort rules from a rule file, puts content in a struct and ev. prints it.
