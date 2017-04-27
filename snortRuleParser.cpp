@@ -22,11 +22,13 @@
 #include <string>
 #include <stdexcept>
 #include <stdlib.h>
+#include <stdint.h>
 
 using namespace std;
 
 struct ruleBody{
     bool negatedContent;
+    //string contentOriginal;
     string content;
     string sid;
   };
@@ -41,94 +43,137 @@ void parsingError(int line, string parsingPart){
 }
 
 void printSnorRule(snortRule rule){
-    fprintf(stdout,"%s\n",rule.header.c_str());
-    fprintf(stdout,"%s\n",rule.body.sid.c_str());
+    fprintf(stdout,"SID: %s\n",rule.body.sid.c_str());
+    //TODO: print revision
+    fprintf(stdout,"Header: %s\n",rule.header.c_str());
     if(rule.body.negatedContent){
         fprintf(stdout,"NOT ");
     }
-    fprintf(stdout,"%s\n",rule.body.content.c_str());
+    //fprintf(stdout,"Original Content:\n%s\n",rule.body.content.c_str());
+    fprintf(stdout,"Content (hex converted):\n%s\n",rule.body.content.c_str());
 
     fprintf(stdout,"\n");
 }
 
-int main () {
-  //disable buffering on stdout:
-  setbuf(stdout, NULL);
-  string line;
-  int linecounter=0;
-  ifstream ruleFile ("100rules.txt");
 
-  //variables used in parsing loop
-  size_t bodyStartPosition;
-  size_t startPosition;
-  size_t endPosition;
-  size_t hexPosition;
-  snortRule tempRule;
-  string quotedContent;
-  string contentWithHex;
+int main (int argc, char* argv[]) {
+    string line;
+    int linecounter=0;
 
-  if (ruleFile.is_open())
-  {
-    //one line is one snort rule
-    while ( getline (ruleFile,line) )
+    //variables used in parsing loop
+    size_t bodyStartPosition;
+    size_t startPosition;
+    size_t endPosition;
+    size_t hexStartPosition;
+    size_t hexEndPosition;
+    size_t tempPosition;
+    snortRule tempRule;
+    string hexContent;
+    string content;
+    string tempContent;
+    string byte;
+    char tempChar;
+
+    //disable buffering on stdout:
+    setbuf(stdout, NULL);
+
+    // Check the number of parameters
+    if (argc != 2) {
+        fprintf(stderr,"Usage: \"snortRuleParser filename\", where filename is the path to a file containing Snort rules\n.");
+        exit(1);
+    }
+
+    ifstream ruleFile ("100rules.txt");
+
+    if (ruleFile.is_open())
     {
-        linecounter++;
-        //find header
-        bodyStartPosition=line.find("(");
-        if(startPosition==string::npos){
-            parsingError(linecounter, "header");
-            exit(0);
-        }
-        tempRule.header=line.substr(0,bodyStartPosition);
+        //one line is one snort rule
+        while ( getline (ruleFile,line) )
+        {
+            linecounter++;
+            //check if rule is alert and if it contains content keyword, almost all rules do and if not it is not interesting for us
+            startPosition=line.substr(0,6).find("alert");
+            endPosition=line.find("content:");
+            if(startPosition==string::npos||endPosition==string::npos){
+                fprintf(stdout,"Rule in line number %d, does not contain alert or content keyword, ignored.\n",linecounter);
+            }else{
+
+                //find header
+                bodyStartPosition=line.find("(");
+                if(startPosition==string::npos){
+                    parsingError(linecounter, "header");
+                    exit(0);
+                }
+                tempRule.header=line.substr(0,bodyStartPosition);
+
+                //find content
+                startPosition=line.find("content:",bodyStartPosition)+8;
+                endPosition=line.find(";",startPosition);
+                if(startPosition==8||endPosition==string::npos){
+                    parsingError(linecounter,"content");
+                }
+                    //check if content is negated BWARE: than also modifiers are negated!!!
+                if(line.substr(startPosition,1)=="!"){
+                    tempRule.body.negatedContent=1;
+                }else{
+                    tempRule.body.negatedContent=0;
+                }
+                content=line.substr(startPosition,(endPosition-startPosition));
+                    //cut away quotes
+                content=content.substr(1,(content.size()-2));
+                //TODO: show original content for comparison purposes
+                //tempRule.body.contentOriginal=content;
+                    //check if it contains hex
+                hexStartPosition=content.find("|");
+                while(hexStartPosition!=string::npos){
+                    hexEndPosition=content.find("|",hexStartPosition+1);
+                    if(hexEndPosition==string::npos){
+                        parsingError(linecounter,"hex content (no termination sign)");
+                    }
+                        //already cutting off first pipe sign
+                    hexContent=content.substr(hexStartPosition+1,(hexEndPosition-hexStartPosition)-1);
+                        //remove spaces from hex string
+                    tempPosition=hexContent.find(" ");
+                    while(tempPosition!=string::npos){
+                        hexContent.erase(tempPosition,1);
+                        tempPosition=hexContent.find(" ",tempPosition);
+                    }
+                        //transform hex to ascii
+                    string asciiString;
+                    for (uint16_t i=0;i<(hexContent.length()/2);i++){
+                        char * pEnd;
+                        byte = hexContent.substr(i,2);
+                        tempChar=(char) (int)strtol(byte.c_str(), &pEnd, 16);
+                        if(isprint(tempChar)){
+                            asciiString.push_back(tempChar);
+                        }else{
+                            fprintf(stdout,"WARNING: Line %d contains non printable ascii character (converted from hex).\n",linecounter);
+                        }
+                    }
+                    //replace hex content with ascii content:
+                    content=content.substr(0,hexStartPosition) + asciiString + content.substr(hexEndPosition+1,(hexEndPosition+1+content.length()));
+                    hexStartPosition=content.find("|",hexEndPosition+1);
+                }
+                //now it should not contain hex anymore
+                tempRule.body.content=content;
+
+                //find SID number
+                //TODO find revision number
+                startPosition=line.find("sid:",bodyStartPosition)+4;
+                endPosition=line.find(';',startPosition);
+                if(startPosition==3||endPosition==string::npos){
+                    parsingError(linecounter,"SID");
+                    exit(0);
+                }
+                tempRule.body.sid=line.substr(startPosition,(endPosition-startPosition));
 
 
-        //find content
-        startPosition=line.find("content:",bodyStartPosition)+8;
-        endPosition=line.find(';',startPosition);
-        if(startPosition==8||endPosition==string::npos){
-            parsingError(linecounter,"content");
-            exit(0);
-        }
-            //check if content is negated BWARE: that also modifiers are negated!!!
-        if(line.substr(startPosition,1)=="!"){
-            tempRule.body.negatedContent=1;
-        }else{
-            tempRule.body.negatedContent=0;
-        }
-        quotedContent=line.substr(startPosition,(endPosition-startPosition));
-        contentWithHex=quotedContent.substr(1,(quotedContent.size()-2));
-            //check if it contains hex
-        if(hexPosition=contentWithHex.find("|")!=string::npos){
-            //implement
-        }else{
-            //does not contain hex
-            tempRule.body.content=contentWithHex;
-        }
-
-        fprintf(stdout,"%s\n",contentWithHex.c_str());
-
-        //find SID number
-        startPosition=line.find("sid:",bodyStartPosition)+4;
-        endPosition=line.find(';',startPosition);
-        if(startPosition==3||endPosition==string::npos){
-            parsingError(linecounter,"SID");
-            exit(0);
-        }
-        tempRule.body.sid=line.substr(startPosition,(endPosition-startPosition));
-
-        printSnorRule(tempRule);
-
+                printSnorRule(tempRule);
+            }
     }
     ruleFile.close();
-//testing the hex to char converter:
-//string hexOfAscii[]={"21","22","23","24","25","26","27","28","29","2A","2B","2C","2D","2E","2F","30","31","32","33","34","35","36","37","38","39","3A","3B","3C","3D","3E","3F","40","41","42","43","44","45","46","47","48","49","4A","4B","4C","4D","4E","4F","50","51","52","53","54","55","56","57","58","59","5A","5B","5C","5D","5E","5F","60","61","62","63","64","65","66","67","68","69","6A","6B","6C","6D","6E","6F","70","71","72","73","74","75","76","77","78","79","7A","7B","7C","7D","7E"};
-
-//            for (int i=0;i<(sizeof(hexOfAscii)/sizeof(hexOfAscii[0]));i++){
-//                char hexChar=(char) (int)strtol(hexOfAscii[i].c_str(), NULL, 16);
-//                fprintf(stdout,"%c\n",hexChar);
-//            }
     }else{
-        fprintf(stderr,"Unable to open file\n");
+        fprintf(stderr,"Unable to open rule file\n");
     }
   return 0;
 }
