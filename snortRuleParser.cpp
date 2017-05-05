@@ -25,6 +25,7 @@
 #include <vector>
 #include <locale>
 
+#define VECTORRESERVE 10
 
 class ruleBody{
     public:
@@ -32,7 +33,9 @@ class ruleBody{
     std::vector<bool> negatedContent;
     std::vector<std::string> contentOriginal;
     std::vector<bool> containsHex;
+    std::vector<bool> contentNocase;
     std::vector<std::string> content;
+    std::vector<std::string> contentModifierHTTP;
     std::string sid;
     std::string rev;
 };
@@ -43,10 +46,7 @@ class snortRule {
     ruleBody body;
 };
 
-int linecounter;
 std::size_t bodyStartPosition;
-std::size_t startPosition;
-std::size_t endPosition;
 
 //TODO
 //void parseHTTP restrictors
@@ -63,6 +63,19 @@ void parsingError(int line, std::string parsingPart){
 *prints snortRule struct to stdout
 */
 void printSnorRule(snortRule* rule){
+
+    //plausability checks:
+    if(rule->body.content.size()!=rule->body.contentOriginal.size()
+    ||rule->body.content.size()!=rule->body.negatedContent.size()
+    ||rule->body.content.size()!=rule->body.containsHex.size()
+    ||rule->body.content.size()!=rule->body.contentModifierHTTP.size()
+    ||rule->body.content.size()!=rule->body.contentNocase.size()){
+        fprintf(stderr,"\n\nError with rule, parsed content vectors do not match in size. Aborting!\n");
+        fprintf(stderr,"content: %d, contentOriginal: %d, negatedContent: %d, containsHex: %d, ContentModifierHttp: %d",
+        rule->body.content.size(),rule->body.contentOriginal.size(),rule->body.negatedContent.size(),rule->body.containsHex.size(),rule->body.contentModifierHTTP.size());
+        exit(1);
+    }
+
     fprintf(stdout,"Message: %s\n",rule->body.msg.c_str());
     fprintf(stdout,"Header: %s\n",rule->header.c_str());
 
@@ -76,8 +89,13 @@ void printSnorRule(snortRule* rule){
         }else{
             fprintf(stdout,"Content:\t\t%s\n",rule->body.content[i].c_str());
         }
+        fprintf(stdout,"ContentModifierHttp:\t%s\n",rule->body.contentModifierHTTP[i].c_str());
+        if(rule->body.contentNocase[i]==true){
+            fprintf(stdout,"Nocase:\ttrue\n");
+        }else{
+            fprintf(stdout,"Nocase:\tfalse\n");
+        }
     }
-
 
     fprintf(stdout,"SID: %s\n",rule->body.sid.c_str());
     fprintf(stdout,"SID rev: %s\n",rule->body.rev.c_str());
@@ -88,11 +106,11 @@ void printSnorRule(snortRule* rule){
 *parses the rule msg from given line and writes it to given snortRule struct
 */
 void parseMsg(std::string* line, int* linecounter, snortRule* tempRule){
-    startPosition=line->find("msg:",startPosition)+4;
-    endPosition=line->find(";",startPosition);
+    std::size_t startPosition=line->find("msg:",startPosition)+4;
+    std::size_t endPosition=line->find(";",startPosition);
     if(startPosition==(std::string::npos+4)||endPosition==std::string::npos){
         parsingError(*linecounter,"msg");
-        exit(0);
+        exit(1);
     }
     tempRule->body.msg=line->substr(startPosition+1,(endPosition-startPosition)-2);
 }
@@ -101,10 +119,10 @@ void parseMsg(std::string* line, int* linecounter, snortRule* tempRule){
 *parses the rule header from given line and writes it to given snortRule class
 */
 void parseHeader(std::string* line, int* linecounter, snortRule* tempRule){
-    bodyStartPosition=line->find("(");
-    if(startPosition==std::string::npos){
+    std::size_t bodyStartPosition=line->find("(");
+    if(bodyStartPosition==std::string::npos){
         parsingError(*linecounter, "header");
-        exit(0);
+        exit(1);
     }
     tempRule->header=line->substr(0,bodyStartPosition);
 }
@@ -114,6 +132,8 @@ void parseHeader(std::string* line, int* linecounter, snortRule* tempRule){
 * it also converts hex characters to ascii characters, if possible, in not it omits them in the output content
 */
 void parseContent(std::string* line, int* linecounter, snortRule* tempRule){
+    std::size_t startPosition;
+    std::size_t endPosition;
     std::size_t hexStartPosition;
     std::size_t hexEndPosition=0;
     std::string hexContent;
@@ -121,29 +141,31 @@ void parseContent(std::string* line, int* linecounter, snortRule* tempRule){
     std::string contentHexFree;
     std::string tempContent;
     std::string byte;
+    //we have to copy the line because we are messing around with it
+    std::string lineCopy=*line;
     char tempChar;
     std::size_t tempPosition;
     int contentCounter=0;
 
     //on the first check there should definitively be at least on content
-    startPosition=line->find("content:",bodyStartPosition)+8;
-    endPosition=line->find(";",startPosition);
+    startPosition=lineCopy.find("content:",bodyStartPosition)+8;
+    endPosition=lineCopy.find(";",startPosition);
     if(startPosition==(std::string::npos+8)||endPosition==std::string::npos){
         parsingError(*linecounter,"content");
-        exit(0);
+        exit(1);
     }
 
     //loop to detect multiple content keywords, same check as above is repeated, will be true first time for sure, but we dont want to call parsingError the other times
     while(startPosition!=(std::string::npos+8)&&endPosition!=std::string::npos){
         contentHexFree="";
         //check if content is negated BWARE: than also modifiers are negated!!!
-        if(line->substr(startPosition,1)=="!"){
+        if(lineCopy.substr(startPosition,1)=="!"){
             tempRule->body.negatedContent.push_back(true);
             fprintf(stdout,"WARNING: Line %d contains negated content, this negates content modifiers too but has not been implementet\n",*linecounter);
         }else{
             tempRule->body.negatedContent.push_back(false);
         }
-        contentOrig=line->substr(startPosition,(endPosition-startPosition));
+        contentOrig=lineCopy.substr(startPosition,(endPosition-startPosition));
         //cut away quotes
         contentOrig=contentOrig.substr(1,(contentOrig.size()-2));
 
@@ -168,7 +190,7 @@ void parseContent(std::string* line, int* linecounter, snortRule* tempRule){
             if(hexEndPosition==std::string::npos){
                 fprintf(stdout,"Debug: content no hex=%s, already converted content: %s\n",contentOrig.c_str(),contentHexFree.c_str());
                 parsingError(*linecounter,"hex content (no termination sign)");
-                exit(0);
+                exit(1);
             }
             //copying hex string and cutting off first pipe sign
             hexContent=contentOrig.substr(hexStartPosition+1,(hexEndPosition-hexStartPosition)-1);
@@ -205,11 +227,80 @@ void parseContent(std::string* line, int* linecounter, snortRule* tempRule){
         //add the summed up content to the rule class
         tempRule->body.content.push_back(contentHexFree);
         //erase content keyword, so that loop can find next content keyword or break
-        line->erase(startPosition-8,8);
-        startPosition=line->find("content:",bodyStartPosition)+8;
-        endPosition=line->find(";",startPosition);
+        lineCopy.erase(startPosition-8,8);
+        startPosition=lineCopy.find("content:",bodyStartPosition)+8;
+        endPosition=lineCopy.find(";",startPosition);
         contentCounter++;
     }//while content loop
+}
+
+/**
+* parses content modifiers
+*/
+void parseContentModifier(std::string* line, int* linecounter, snortRule* tempRule){
+    std::size_t startPosition;
+    std::size_t endPosition;
+    std::size_t contentEndPosition;
+    std::size_t httpModifierStartPosition;
+    std::size_t httpModifierEndPosition;
+    std::string allModifiers;
+    std::string lineCopy= *line;
+
+    //on the first check there should definitively be at least on content
+    startPosition=lineCopy.find("content:",bodyStartPosition)+8;
+    endPosition=lineCopy.find("content:",startPosition);
+    //for last content in rule the end is marked by the closing bracket of the rule body
+    if(endPosition==std::string::npos){
+        endPosition=(lineCopy.find(";)",startPosition));
+    }
+
+    if(startPosition==(std::string::npos+8)||endPosition==std::string::npos){
+        parsingError(*linecounter,"content (modifier)");
+        exit(1);
+    }
+
+    //loop to detect multiple content keywords, same check as above is repeated, will be true first time for sure, but we dont want to call parsingError the other times
+    while(startPosition!=(std::string::npos+8)&&endPosition!=std::string::npos){
+        allModifiers=lineCopy.substr(startPosition,endPosition-startPosition);
+        //erase content string, so we dont mix up any content with that
+        contentEndPosition=allModifiers.find(";");
+        if(startPosition==(std::string::npos+8)||endPosition==std::string::npos){
+            parsingError(*linecounter,"content (modifier), content string end position");
+            exit(1);
+        }
+        allModifiers.erase(0,contentEndPosition+1);
+
+        //see if it contains the nocase modifier
+        if(allModifiers.find("nocase;")==std::string::npos){
+            tempRule->body.contentNocase.push_back(false);
+        }else{
+            tempRule->body.contentNocase.push_back(true);
+        }
+
+        //find http content modifier:
+        httpModifierStartPosition=allModifiers.find("http_");
+        if(httpModifierStartPosition==std::string::npos){
+            tempRule->body.contentModifierHTTP.push_back("");
+        }else{
+            httpModifierEndPosition=allModifiers.find(";",httpModifierStartPosition);
+            if(httpModifierEndPosition==std::string::npos){
+                parsingError(*linecounter,"content (modifier), content httpModifier end position");
+                exit(1);
+            }
+
+            tempRule->body.contentModifierHTTP.push_back(allModifiers.substr(httpModifierStartPosition,(httpModifierEndPosition-httpModifierStartPosition)));
+        }
+
+        //erase content keyword and content string, so that next content can be found
+        lineCopy.erase(startPosition-8,+8);
+
+        startPosition=lineCopy.find("content:",bodyStartPosition)+8;
+        endPosition=lineCopy.find("content:",startPosition);
+        //for last content in rule the end is marked by the closing bracket of the rule body
+        if(endPosition==std::string::npos){
+            endPosition=(lineCopy.find(";)",startPosition))+1;
+        }
+    }
 }
 
 /**
@@ -217,11 +308,11 @@ void parseContent(std::string* line, int* linecounter, snortRule* tempRule){
 */
 void parseSid(std::string* line, int* linecounter, snortRule* tempRule){
                 //parse SID
-                startPosition=line->find("sid:",bodyStartPosition)+4;
-                endPosition=line->find(';',startPosition);
+                std::size_t startPosition=line->find("sid:",bodyStartPosition)+4;
+                std::size_t endPosition=line->find(';',startPosition);
                 if(startPosition==3||endPosition==std::string::npos){
                     parsingError(*linecounter,"SID");
-                    exit(0);
+                    exit(1);
                 }
                 tempRule->body.sid=line->substr(startPosition,(endPosition-startPosition));
 
@@ -230,20 +321,21 @@ void parseSid(std::string* line, int* linecounter, snortRule* tempRule){
                 endPosition=line->find(';',startPosition);
                 if(startPosition==3||endPosition==std::string::npos){
                     parsingError(*linecounter,"SID revision");
-                    exit(0);
+                    exit(1);
                 }
                 tempRule->body.rev=line->substr(startPosition,(endPosition-startPosition));
 }
 
 int main (int argc, char* argv[]) {
     std::string line;
-    linecounter=0;
+    int linecounter=0;
     snortRule tempRule;
     //hardly any rule will use more than 15 content keywords
-    tempRule.body.content.reserve(15);
-    tempRule.body.contentOriginal.reserve(15);
-    tempRule.body.containsHex.reserve(15);
-    tempRule.body.negatedContent.reserve(15);
+    tempRule.body.content.reserve(VECTORRESERVE);
+    tempRule.body.contentOriginal.reserve(VECTORRESERVE);
+    tempRule.body.containsHex.reserve(VECTORRESERVE);
+    tempRule.body.negatedContent.reserve(VECTORRESERVE);
+    tempRule.body.contentModifierHTTP.reserve(VECTORRESERVE);
     //disable buffering on stdout:
     setbuf(stdout, NULL);
 
@@ -262,22 +354,26 @@ int main (int argc, char* argv[]) {
             linecounter++;
 
             //check if rule is alert and if it contains content keyword, almost all rules do and if not it is not interesting for us
-            startPosition=line.substr(0,6).find("alert");
-            endPosition=line.find("content:");
+            std::size_t startPosition=line.substr(0,6).find("alert");
+            std::size_t endPosition=line.find("content:");
             if(startPosition==std::string::npos||endPosition==std::string::npos){
                 fprintf(stdout,"Rule in line number %d, does not contain alert or content keyword. Aborting.\n",linecounter);
-                exit(0);
+                exit(1);
             }else{
-                parseMsg(&line,&linecounter,&tempRule);
                 parseHeader(&line,&linecounter,&tempRule);
+                parseMsg(&line,&linecounter,&tempRule);
                 parseContent(&line, &linecounter,&tempRule);
+                parseContentModifier(&line, &linecounter,&tempRule);
                 parseSid(&line, &linecounter,&tempRule);
+
                 printSnorRule(&tempRule);
             }
             tempRule.body.containsHex.clear();
             tempRule.body.content.clear();
             tempRule.body.negatedContent.clear();
             tempRule.body.contentOriginal.clear();
+            tempRule.body.contentModifierHTTP.clear();
+            tempRule.body.contentNocase.clear();
     }
     ruleFile.close();
     }else{
