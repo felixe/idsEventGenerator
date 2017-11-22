@@ -24,6 +24,7 @@
 #include <stdint.h>
 #include <vector>
 #include <locale>
+#include <curl/curl.h>
 
 #define VECTORRESERVE 10
 
@@ -468,6 +469,44 @@ void parseSid(std::string* line, int* linecounter, snortRule* tempRule){
                 tempRule->body.rev=lineCopy.substr(startPosition,(endPosition-startPosition));
 }
 
+/*
+*Function that is used to handle return data from sent requests
+*/
+size_t write_data(void *buffer, size_t size, size_t nmemb, void *userp){
+
+        //ev. print response which resides in buffer
+        printf("%s", buffer);
+        return size*nmemb;
+}
+
+
+/**
+ * sends an HTTP request to the given host containing the pattern of the given rule
+ */
+int sendRulePacket(snortRule* rule, CURL *handle, std::string host){
+    CURLcode result;
+    std::string content="Content: ";
+    content=content + rule->body.content[0];
+	//list for custom headers
+	struct curl_slist *header=NULL;
+	//add custom header NOTE: do not append crlf at the end, is done automatically
+	header=curl_slist_append(header, content.c_str());
+	curl_easy_setopt(handle, CURLOPT_URL, host.c_str());
+	//set custom set of headers from list above
+	curl_easy_setopt(handle, CURLOPT_HTTPHEADER, header);
+    //tell curl to use custom function to handle data insteat of writing it to stdout
+    curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, write_data);
+
+
+
+    //do it!
+    result=curl_easy_perform(handle);
+    if(result != CURLE_OK){
+            fprintf(stderr, "curl_easy_perform() failed: %s\n",curl_easy_strerror(result));
+            return -1;
+    }
+}
+
 int main (int argc, char* argv[]) {
     std::string line;
     int linecounter=0;
@@ -475,6 +514,8 @@ int main (int argc, char* argv[]) {
     std::size_t alertPosition;
     std::size_t contentPosition;
     std::size_t pcrePosition;
+
+    std::vector<snortRule> parsedRules;
 
     //hardly any rule will use more than 15 content keywords
     tempRule.body.content.reserve(VECTORRESERVE);
@@ -492,6 +533,12 @@ int main (int argc, char* argv[]) {
         fprintf(stderr,"This is a rule parser for Snort IDS rules.\n\nUsage:\n\"%s filename\"\nwhere 'filename' is the path to a file containing Snort rules.\n",argv[0]);
         exit(1);
     }
+
+    //initialize all stuff needed for sending packets with curl
+    curl_global_init(CURL_GLOBAL_ALL);
+    CURL *easyHandle;
+    //using easy interface, no need for simultaneous transfers
+    easyHandle = curl_easy_init();
 
     std::ifstream ruleFile (argv[1]);
     if (ruleFile.is_open())
@@ -519,7 +566,7 @@ int main (int argc, char* argv[]) {
                         parsePcre(&line, &linecounter,&tempRule);
                     }
                     parseSid(&line, &linecounter,&tempRule);
-                    printSnortRule(&tempRule);
+                    parsedRules.push_back(tempRule);
                 }
             }
             tempRule.body.containsHex.clear();
@@ -535,5 +582,16 @@ int main (int argc, char* argv[]) {
     }else{
         fprintf(stderr,"Unable to open rule file\n");
     }
-  return 0;
+
+    for(unsigned long i=0;i<parsedRules.size();i++){
+        printSnortRule(&parsedRules[i]);
+    }
+
+    for(unsigned long i=0;i<parsedRules.size();i++){
+        sendRulePacket(&parsedRules[i],easyHandle,"ccs-labs.org");
+    }
+
+    //clean up stuff needed for sending packets
+    curl_easy_cleanup(easyHandle);
+    return 0;
 }
