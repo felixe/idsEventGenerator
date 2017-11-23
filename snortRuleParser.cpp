@@ -25,6 +25,7 @@
 #include <vector>
 #include <locale>
 #include <curl/curl.h>
+#include <getopt.h>
 
 #define VECTORRESERVE 10
 
@@ -50,6 +51,7 @@ class snortRule {
 };
 
 std::size_t bodyStartPosition;
+bool printResponse=false;
 
 //TODO
 //convert more than the first 128 ascii character (minus nonprintable chars)
@@ -475,13 +477,15 @@ void parseSid(std::string* line, int* linecounter, snortRule* tempRule){
 size_t write_data(void *buffer, size_t size, size_t nmemb, void *userp){
 
         //ev. print response which resides in buffer
-        printf("%s", buffer);
+		if(printResponse){
+			printf("\nRESPONSE:\n%s\n", buffer);
+		}
         return size*nmemb;
 }
 
 
 /**
- * sends an HTTP request to the given host containing the pattern of the given rule
+ * sends an HTTP request to the given host containing the pattern(s) of the given rule
  */
 int sendRulePacket(snortRule* rule, CURL *handle, std::string host){
     CURLcode result;
@@ -507,9 +511,28 @@ int sendRulePacket(snortRule* rule, CURL *handle, std::string host){
     }
 }
 
+/**
+ * prints usage message
+ */
+void usage(std::string progName){
+	std::cerr << "Usage: " << progName << " -f <filename> [option]\n"
+			<< "where filename is a file containing snort rules\n"
+			<< "Options:\n"
+			<< "\t-f,--file\t\tfile with snort rules\n"
+			<< "\t-h,--help\t\tShow this help message\n"
+			<< "\t-r,--response\t\tPrint response from server (requires -s)\n"
+			<< "\t-s,--server\t\tSpecify the hostname or ip where crafted packets should be sent to, if not set no packets will be sent\n"
+			<< "\t-p,--print\t\tPrint rules parsed from file"
+			<< std::endl;
+}
+
 int main (int argc, char* argv[]) {
-    std::string line;
-    int linecounter=0;
+    std::string line, readFile, host;
+    bool ruleFileSet=false;
+    bool printRules=false;
+    bool sendPackets=false;
+
+    int linecounter=0,index=0,iarg=0;
     snortRule tempRule;
     std::size_t alertPosition;
     std::size_t contentPosition;
@@ -529,9 +552,63 @@ int main (int argc, char* argv[]) {
     setbuf(stdout, NULL);
 
     // Check the number of parameters
-    if (argc != 2) {
-        fprintf(stderr,"This is a rule parser for Snort IDS rules.\n\nUsage:\n\"%s filename\"\nwhere 'filename' is the path to a file containing Snort rules.\n",argv[0]);
-        exit(1);
+    if (argc <= 1) {
+        fprintf(stderr,"Too few arguments\n");
+        usage(argv[0]);
+        exit(0);
+    }
+
+    //go through arguments
+    while(1){
+    	const struct option longOptions[]={
+    	        {"print",    no_argument,        0, 'p'},
+    	        {"help",     no_argument,        0, 'h'},
+				{"response", no_argument,    	 0, 'r'},
+    	        {"server",   required_argument,  0, 's'},
+    			{"file",     required_argument,  0, 'f'},
+    	        {0,			 0,					 0,  0},
+    	};
+        iarg = getopt_long_only(argc, argv, "s:f:prh", longOptions, &index);
+        //printf("iarg: %d\n",iarg);
+        if (iarg == -1){
+            break;}
+        switch (iarg){
+    		case 'h':
+            	usage(argv[0]);
+            	exit(1);
+        	case 'p':
+        		printRules=true;
+        		std::cout << "Configured to print parsed rules\n";
+    			break;
+        	case 'r':
+        		printResponse=true;
+        		std::cout << "Configured to print response from server\n";
+    			break;
+        	case 'f':
+        		readFile=optarg;
+    			ruleFileSet=true;
+    			std::cout << "Configured to read from file: "<< readFile <<"\n";
+    			break;
+        	case 's':
+        		host=optarg;
+        		sendPackets=true;
+        		std::cout << "Configured to send packets to host: "<< host <<"\n";
+        		break;
+        	case '?':
+        		// getopt_long_only returns '?' for an ambiguous match or an extraneous parameter
+        		//ignore it
+        		break;
+        	default:
+        		printf("unrecognized argument: %c \n",optarg);
+        		usage(argv[0]);
+        		exit(1);
+        	}
+
+    }
+
+    if(ruleFileSet==false){
+    	usage(argv[0]);
+    	exit(0);
     }
 
     //initialize all stuff needed for sending packets with curl
@@ -540,7 +617,7 @@ int main (int argc, char* argv[]) {
     //using easy interface, no need for simultaneous transfers
     easyHandle = curl_easy_init();
 
-    std::ifstream ruleFile (argv[1]);
+    std::ifstream ruleFile (readFile.c_str());
     if (ruleFile.is_open())
     {
         //one line is one snort rule
@@ -580,18 +657,28 @@ int main (int argc, char* argv[]) {
     }
     ruleFile.close();
     }else{
-        fprintf(stderr,"Unable to open rule file\n");
+        fprintf(stderr,"Unable to open rule file %s\n", readFile.c_str());
+        exit(0);
     }
 
-    for(unsigned long i=0;i<parsedRules.size();i++){
-        printSnortRule(&parsedRules[i]);
+    if(printRules){
+		for(unsigned long i=0;i<parsedRules.size();i++){
+			printSnortRule(&parsedRules[i]);
+		}
+    }else{
+    	std::cout << "Not printing rules\n";
     }
 
-    for(unsigned long i=0;i<parsedRules.size();i++){
-        sendRulePacket(&parsedRules[i],easyHandle,"ccs-labs.org");
+    if(sendPackets){
+		for(unsigned long i=0;i<parsedRules.size();i++){
+			sendRulePacket(&parsedRules[i],easyHandle,host);
+		}
+    }else{
+    	std::cout << "Not sending out packets\n";
     }
-
     //clean up stuff needed for sending packets
     curl_easy_cleanup(easyHandle);
+
+    std::cout << "--ByeBye--\n";
     return 0;
 }
