@@ -37,7 +37,13 @@ class ruleBody{
     std::vector<bool> containsHex;
     std::vector<bool> contentNocase;
     std::vector<std::string> content;
-    std::vector<std::string> contentModifierHTTP;
+    std::vector<int> contentModifierHTTP;
+    //content modifier are encoded for faster processing:
+    //1:http_method
+    //2:http_uri
+    //3:http_raw_uri
+    //4:http_stat_msg
+    //5:http_stat_code
     std::vector<std::string> pcre;
     std::vector<bool> negatedPcre;
     std::string sid;
@@ -66,7 +72,7 @@ void parsingError(int line, std::string parsingPart){
 *prints snortRule struct to stdout
 */
 void printSnortRule(snortRule* rule){
-
+	std::string modifierHttp;
     //plausability checks:
     if(rule->body.content.size()!=rule->body.contentOriginal.size()
     ||rule->body.content.size()!=rule->body.negatedContent.size()
@@ -94,7 +100,16 @@ void printSnortRule(snortRule* rule){
         }else{
             fprintf(stdout,"Content:\t\t\t%s\n",rule->body.content[i].c_str());
         }
-        fprintf(stdout,"ContentModifierHttp:\t\t%s\n",rule->body.contentModifierHTTP[i].c_str());
+        switch(rule->body.contentModifierHTTP.at(i)){
+                	case 0: modifierHttp=""; break;
+                	case 1: modifierHttp="http_method"; break;
+                	case 2: modifierHttp="http_uri"; break;
+                	case 3: modifierHttp="http_raw_uri"; break;
+                	case 4: modifierHttp="http_stat_msg"; break;
+                	case 5: modifierHttp="http_stat_code"; break;
+                	default: fprintf(stderr,"IpfixIds: Wrong content modifier HTTP encoding. Aborting!"); exit(0);
+                }
+        fprintf(stdout,"ContentModifierHttp:\t\t%s\n",modifierHttp.c_str());
         if(rule->body.contentNocase[i]==true){
             fprintf(stdout,"Nocase:\t\t\t\ttrue\n");
         }else{
@@ -328,7 +343,7 @@ void parseContent(std::string* line, int* linecounter, snortRule* tempRule){
 
 /**
 * parses content modifiers from given line and writes it to given tempRule class in the corresponding vector
-* TODO: at the moment only nocase and http_content modifier are parsed
+* TODO: at the moment only nocase and http_content modifiers are parsed
 */
 void parseContentModifier(std::string* line, int* linecounter, snortRule* tempRule){
     std::size_t startPosition;
@@ -379,14 +394,38 @@ void parseContentModifier(std::string* line, int* linecounter, snortRule* tempRu
         //find http content modifier:
         httpModifierStartPosition=allModifiers.find("http_");
         if(httpModifierStartPosition==std::string::npos){
-            tempRule->body.contentModifierHTTP.push_back("");
+            tempRule->body.contentModifierHTTP.push_back(0);
         }else{
             httpModifierEndPosition=allModifiers.find(";",httpModifierStartPosition);
             if(httpModifierEndPosition==std::string::npos){
                 parsingError(*linecounter,"content (modifier), content httpModifier end position");
                 exit(1);
             }
-            tempRule->body.contentModifierHTTP.push_back(allModifiers.substr(httpModifierStartPosition,(httpModifierEndPosition-httpModifierStartPosition)));
+            temp=allModifiers.substr(httpModifierStartPosition,(httpModifierEndPosition-httpModifierStartPosition));
+            if(temp=="http_method"){
+            	tempRule->body.contentModifierHTTP.push_back(1);
+            }else if(temp=="http_uri"){
+            	tempRule->body.contentModifierHTTP.push_back(2);
+            	//replace whitespaces in content patterns for http uris
+            	//printf("uri detected, replacing:\n");
+            	//temp=tempRule->body.content[tempRule->body.contentModifierHTTP.size()-1];
+            	//printf("uri detected, replacing:\n");
+                for(int i = 0; i < tempRule->body.content.at(tempRule->body.contentModifierHTTP.size()-1).length(); i++)
+                {
+                    if(tempRule->body.content.at(tempRule->body.contentModifierHTTP.size()-1).at(i)== ' '){
+                    	tempRule->body.content.at(tempRule->body.contentModifierHTTP.size()-1).at(i) = '+';
+                    }
+                }
+                //tempRule->body.content.at(tempRule->body.contentModifierHTTP.size()-1)=temp;
+            }else if(temp=="http_raw_uri"){
+            	tempRule->body.contentModifierHTTP.push_back(3);
+            }else if(temp=="http_stat_msg"){
+            	//fprintf(stderr,"SnortRuleparser: content modifier http_stat_msg not supported in this version\n"); //just uncomment lines to support it
+            	tempRule->body.contentModifierHTTP.push_back(4);
+            }else if(temp=="http_stat_code"){
+            	//fprintf(stderr,"SnortRuleparser: content modifier http_stat_code not supported in this version\n"); //just uncomment lines to support it
+            	tempRule->body.contentModifierHTTP.push_back(5);
+            }
         }
 
         //erase content keyword and content string, so that next content can be found
@@ -395,7 +434,7 @@ void parseContentModifier(std::string* line, int* linecounter, snortRule* tempRu
 
         startPosition=lineCopySearch.find("content:",bodyStartPosition)+8;
         endPosition=lineCopySearch.find("content:",startPosition);
-        //for last content in rule the end is marked by the closing bracket of the rule body
+        //for last content in rule, the end is marked by the closing bracket of the rule body
         if(endPosition==std::string::npos){
             endPosition=(lineCopy.find(";)",startPosition))+1;
         }
@@ -489,26 +528,62 @@ size_t write_data(void *buffer, size_t size, size_t nmemb, void *userp){
  */
 int sendRulePacket(snortRule* rule, CURL *handle, std::string host){
     CURLcode result;
-    std::string content="Content: ";
-    content=content + rule->body.content[0];
-	//list for custom headers
-	struct curl_slist *header=NULL;
-	//add custom header NOTE: do not append crlf at the end, is done automatically
-	header=curl_slist_append(header, content.c_str());
-	curl_easy_setopt(handle, CURLOPT_URL, host.c_str());
+    std::string hostUri=host;
+
+    /** FWIW: In curl there is also the possibility to insert custom headers as in the following example.     */
+	//list for custom headers, here we put the our event triggering content
+	//struct curl_slist *header=NULL;
+	//std::string content="Content: ";
+	//add custom headers from above NOTE: do not append crlf at the end, is done automatically
+	//header=curl_slist_append(header, content.c_str());
 	//set custom set of headers from list above
-	curl_easy_setopt(handle, CURLOPT_HTTPHEADER, header);
-    //tell curl to use custom function to handle data insteat of writing it to stdout
-    curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, write_data);
+	//curl_easy_setopt(handle, CURLOPT_HTTPHEADER, header);
+
+	//tell curl to use custom function to handle return data insteat of writing it to stdout
+	curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, write_data);
+	//use http protocol, is default anyway so just to make sure
+	curl_easy_setopt(handle, CURLOPT_PROTOCOLS, CURLPROTO_HTTP);
+
+    for(int j=0;j<rule->body.content.size();j++){
+
+    	switch(rule->body.contentModifierHTTP[j]){
+        			//TODO: its probably faster to encode method to something like int to avoid string comparison
+					case 1:{//http_method
+							if(rule->body.content[j]=="GET"){
+								curl_easy_setopt(handle, CURLOPT_HTTPGET, 1L);
+							}else if(rule->body.content[j]=="POST"){
+								curl_easy_setopt(handle, CURLOPT_POST, 1L);
+							//for everything else use the given method string
+							}else{
+								curl_easy_setopt(handle, CURLOPT_CUSTOMREQUEST, rule->body.content[j].c_str());
+							}
+							break;
+					}
+					case 2:	//http_uri
+					case 3:{//http_raw_uri
+							hostUri=host+rule->body.content[j].c_str();
+							break;
+					}
+					//TODO: check if this keyword is present in rules and possibly leave this check away if not
+					case 4:{//http_stat_msg
+							fprintf(stderr,"can not control server responses, please leave this rule (sid: %s) away",rule->body.sid.c_str()); exit(0);
+							break;
+
+					}
+    	}
+    	//use given host
+    	curl_easy_setopt(handle, CURLOPT_URL, hostUri.c_str());
 
 
 
-    //do it!
-    result=curl_easy_perform(handle);
-    if(result != CURLE_OK){
-            fprintf(stderr, "curl_easy_perform() failed: %s\n",curl_easy_strerror(result));
-            return -1;
     }
+    //do it!
+	result=curl_easy_perform(handle);
+	if(result != CURLE_OK){
+			fprintf(stderr, "curl_easy_perform() failed: %s\n",curl_easy_strerror(result));
+			return -1;
+	}
+
 }
 
 /**
