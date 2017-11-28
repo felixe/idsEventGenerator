@@ -15,6 +15,15 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
+ *
+ * Reads Snort rules and puts interesting fields in a struct for further usage.
+ * This is rather a READER than a parser, as it assumes a basic structure of rules and does not
+ * do in-depth checks of structure.
+ *
+ * REMARKS:
+ * -If hex chars are encountered (everything between two '|' signs) it is converted to ascii, but only if part of the first 128 ascii chars and only if printable
+ * -Whitespace in content patterns with http_uri modifier is generally converted to the + sign, if you want %20 as whitespacethan change it in the rule.
+ * -flowbits, distance,within,offset,depth keywords are ignored for now without further notice. FIXIT!
  */
 
 #include <iostream>
@@ -80,9 +89,8 @@ void printSnortRule(snortRule* rule){
     ||rule->body.content.size()!=rule->body.contentModifierHTTP.size()
     ||rule->body.content.size()!=rule->body.contentNocase.size()
     ||rule->body.negatedPcre.size()!=rule->body.pcre.size()){
-        fprintf(stderr,"\n\nThere was an Error in rule parsing, parsed content vectors do not match in size. This should not have happened Aborting!\n");
-        //fprintf(stderr,"content: %lu, contentOriginal: %lu, negatedContent: %lu, containsHex: %lu, ContentModifierHttp: %lu",
-        //rule->body.content.size(),rule->body.contentOriginal.size(),rule->body.negatedContent.size(),rule->body.containsHex.size(),rule->body.contentModifierHTTP.size());
+        fprintf(stderr,"\n\nThere was an Error in rule parsing, parsed content vectors do not match in size. This should not have happened. Aborting!\n");
+        fprintf(stderr,"content: %lu, contentOriginal: %lu, negatedContent: %lu, containsHex: %lu, ContentModifierHttp: %lu\n",rule->body.content.size(),rule->body.contentOriginal.size(),rule->body.negatedContent.size(),rule->body.containsHex.size(),rule->body.contentModifierHTTP.size());
         exit(1);
     }
 
@@ -107,7 +115,8 @@ void printSnortRule(snortRule* rule){
                 	case 3: modifierHttp="http_raw_uri"; break;
                 	case 4: modifierHttp="http_stat_msg"; break;
                 	case 5: modifierHttp="http_stat_code"; break;
-                	default: fprintf(stderr,"IpfixIds: Wrong content modifier HTTP encoding. Aborting!"); exit(0);
+                	case 6: modifierHttp="http_header"; break;
+                	default: fprintf(stderr,"IpfixIds: Wrong content modifier HTTP encoding. Aborting!\n"); exit(0);
                 }
         fprintf(stdout,"ContentModifierHttp:\t\t%s\n",modifierHttp.c_str());
         if(rule->body.contentNocase[i]==true){
@@ -355,15 +364,15 @@ void parseContentModifier(std::string* line, int* linecounter, snortRule* tempRu
     std::string allModifiers;
     //we have to copy the line because we are messing around with it
     std::string lineCopy=*line;
-    //this string is the same as lineCopy, only quotet text is replaces by X. length is the same. this way, searches dont trigger falsely on content found in quotes
+    //this string is the same as lineCopy, only quoted text is replaces by X. length is the same. this way, searches dont trigger falsely on content found in quotes
     std::string lineCopySearch=replaceQuotedText(&lineCopy);
 
-    //on the first check there should definitively be at least on content
+    //on the first check there should definitively be at least one content
     startPosition=lineCopySearch.find("content:",bodyStartPosition)+8;
     endPosition=lineCopySearch.find("content:",startPosition);
     //for last content in rule the end is marked by the closing bracket of the rule body
     if(endPosition==std::string::npos){
-        //do we have a +1 error here because of semicolon AND parentheses? No, because rule requires sid and rev keywords, and they are places after modifiers
+        //do we have a +1 error here because of semicolon AND parentheses? No, because rule requires sid and rev keywords, and they are placed after modifiers
         endPosition=(lineCopySearch.find(";)",startPosition));
     }
 
@@ -425,6 +434,9 @@ void parseContentModifier(std::string* line, int* linecounter, snortRule* tempRu
             }else if(temp=="http_stat_code"){
             	//fprintf(stderr,"SnortRuleparser: content modifier http_stat_code not supported in this version\n"); //just uncomment lines to support it
             	tempRule->body.contentModifierHTTP.push_back(5);
+            }else if(temp=="http_header"){
+            	//fprintf(stderr,"SnortRuleparser: content modifier http_header not supported in this version\n"); //just uncomment lines to support it
+            	tempRule->body.contentModifierHTTP.push_back(6);
             }
         }
 
@@ -443,6 +455,8 @@ void parseContentModifier(std::string* line, int* linecounter, snortRule* tempRu
 
 /**
 * parses pcre patterns in given line and writes it to given tempRule class in the corresponding vector
+* TODO: needs to be improved: does pcre allow content modifiers? at the moment none are parsed, but there are vector length checks that expect a modifier for each pcre
+* TODO: at the moment unused
 */
 void parsePcre(std::string* line, int* linecounter, snortRule* tempRule){
     std::size_t startPosition;
@@ -528,7 +542,8 @@ size_t write_data(void *buffer, size_t size, size_t nmemb, void *userp){
  */
 int sendRulePacket(snortRule* rule, CURL *handle, std::string host){
     CURLcode result;
-    std::string hostUri=host;
+    std::size_t doppler;
+    std::string hostUri="";
 
     /** FWIW: In curl there is also the possibility to insert custom headers as in the following example.     */
 	//list for custom headers, here we put the our event triggering content
@@ -545,7 +560,6 @@ int sendRulePacket(snortRule* rule, CURL *handle, std::string host){
 	curl_easy_setopt(handle, CURLOPT_PROTOCOLS, CURLPROTO_HTTP);
 
     for(int j=0;j<rule->body.content.size();j++){
-
     	switch(rule->body.contentModifierHTTP[j]){
         			//TODO: its probably faster to encode method to something like int to avoid string comparison
 					case 1:{//http_method
@@ -561,22 +575,23 @@ int sendRulePacket(snortRule* rule, CURL *handle, std::string host){
 					}
 					case 2:	//http_uri
 					case 3:{//http_raw_uri
-							hostUri=host+rule->body.content[j].c_str();
+							hostUri=hostUri+rule->body.content[j].c_str();
 							break;
 					}
 					//TODO: check if this keyword is present in rules and possibly leave this check away if not
 					case 4:{//http_stat_msg
 							fprintf(stderr,"can not control server responses, please leave this rule (sid: %s) away",rule->body.sid.c_str()); exit(0);
 							break;
-
 					}
     	}
-    	//use given host
-    	curl_easy_setopt(handle, CURLOPT_URL, hostUri.c_str());
-
-
-
     }
+    //make sure there are no double / in hostUri and prepend the host to the uri (curl divides both when doing http)
+    while(hostUri.find("/")==0){
+    	hostUri.erase(0,1);
+    }
+    hostUri.insert(0,host+"/");
+    //tell curl which host and uri to use
+    curl_easy_setopt(handle, CURLOPT_URL, hostUri.c_str());
     //do it!
 	result=curl_easy_perform(handle);
 	if(result != CURLE_OK){
@@ -606,6 +621,7 @@ int main (int argc, char* argv[]) {
     bool ruleFileSet=false;
     bool printRules=false;
     bool sendPackets=false;
+    bool pushRule=true;
 
     int linecounter=0,index=0,iarg=0;
     snortRule tempRule;
@@ -693,33 +709,59 @@ int main (int argc, char* argv[]) {
     easyHandle = curl_easy_init();
 
     std::ifstream ruleFile (readFile.c_str());
-    if (ruleFile.is_open())
-    {
+    if (ruleFile.is_open()){
         //one line is one snort rule
-        while ( getline (ruleFile,line) )
-        {
-            linecounter++;
+        while ( getline (ruleFile,line) ){
+        	pushRule=true;
+        	linecounter++;
             //check if rule is a comment, if yes-> ignore
             if(line.substr(0,1)!="#"){
                 //check if rule is alert and if it contains content keyword, almost all rules do and if not it is not interesting for us
                 alertPosition=line.substr(0,6).find("alert");
                 contentPosition=line.find("content:");
                 pcrePosition=line.find("pcre:");
-                if(alertPosition==std::string::npos||(contentPosition==std::string::npos&&pcrePosition==std::string::npos)){
-                    fprintf(stdout,"WARNING: Rule in line number %d, does not contain alert or content/pcre keyword.\n",linecounter);
-                }else{
+                //sort out rules that we are not interested in
+                if(alertPosition==std::string::npos){
+                    fprintf(stdout,"WARNING: Rule in line number %d, does not contain alert keyword. Ignored\n",linecounter);
+                }else if(contentPosition==std::string::npos){
+                	fprintf(stdout,"WARNING: Rule in line number %d, does not contain content keyword. Ignored\n",linecounter);
+                }else if(pcrePosition!=std::string::npos){
+                	fprintf(stdout,"WARNING: Rule in line number %d, contains pcre keyword which is not supported (yet). Ignored\n",linecounter);
+            	}else if(line.find("http_")==std::string::npos){
+                	fprintf(stdout,"WARNING: Rule in line number %d, does not contain an http_ content modifier. Ignored\n",linecounter);
+            	}else if(line.find("http_header")!=std::string::npos){ //but parsing is already implemented
+                	fprintf(stdout,"WARNING: Rule in line number %d, contains an http_header content modifier which is not supported (yet). Ignored\n",linecounter);
+            	}else if(line.find("http_client_body")!=std::string::npos){
+            	    fprintf(stdout,"WARNING: Rule in line number %d, contains an http_client_body content modifier which is not supported (yet). Ignored\n",linecounter);
+            	}else if(line.find("http_cookie")!=std::string::npos){
+            	    fprintf(stdout,"WARNING: Rule in line number %d, contains an http_cookie content modifier which is not supported (yet). Ignored\n",linecounter);
+            	}else if(line.find("http_raw_header")!=std::string::npos){
+            	    fprintf(stdout,"WARNING: Rule in line number %d, contains an http_raw_header content modifier which is not supported (yet). Ignored\n",linecounter);
+            	}else{
                     parseHeader(&line,&linecounter,&tempRule);
                     parseMsg(&line,&linecounter,&tempRule);
+                    //it might contain no content (just pcre), than skip parseContent
                     if(contentPosition!=std::string::npos){
                         parseContent(&line, &linecounter,&tempRule);
                         parseContentModifier(&line, &linecounter,&tempRule);
                     }
-                    if(pcrePosition!=std::string::npos){
-                        parsePcre(&line, &linecounter,&tempRule);
-                    }
+                    //TODO: ev. uncomment if pcre's are supported again
+                    //no pcre?
+                    //if(pcrePosition!=std::string::npos){
+                    //    parsePcre(&line, &linecounter,&tempRule);
+                    //}
                     parseSid(&line, &linecounter,&tempRule);
-                    parsedRules.push_back(tempRule);
-                }
+                    //do not allow rules which have no content modifier
+					for (unsigned long i = 0; i < tempRule.body.content.size();i++) {
+						if (tempRule.body.contentModifierHTTP.at(i) == 0) {
+							pushRule = false;
+							fprintf(stdout,"WARNING: Rule in line number %d, contains at least one content without http_* content modifier. Ignored\n",linecounter);
+						}
+					}
+					if (pushRule) {
+						parsedRules.push_back(tempRule);
+					}
+            	}
             }
             tempRule.body.containsHex.clear();
             tempRule.body.content.clear();
@@ -735,6 +777,7 @@ int main (int argc, char* argv[]) {
         fprintf(stderr,"Unable to open rule file %s\n", readFile.c_str());
         exit(0);
     }
+    std::cout << parsedRules.size() << " rules successfully parsed\n";
 
     if(printRules){
 		for(unsigned long i=0;i<parsedRules.size();i++){
@@ -754,6 +797,6 @@ int main (int argc, char* argv[]) {
     //clean up stuff needed for sending packets
     curl_easy_cleanup(easyHandle);
 
-    std::cout << "--ByeBye--\n";
+    std::cout << "--------\n-ByeBye-\n--------\n";
     return 0;
 }
