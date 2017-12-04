@@ -540,28 +540,23 @@ size_t write_data(void *buffer, size_t size, size_t nmemb, void *userp){
 /**
  * sends an HTTP request to the given host containing the pattern(s) of the given rule
  */
-int sendRulePacket(snortRule* rule, CURL *handle, std::string host){
+int sendRulePacket(snortRule* rule, CURL *handle, std::string host,bool verbose){
     CURLcode result;
     std::size_t doppler;
     std::string hostUri="";
 
-    /** FWIW: In curl there is also the possibility to insert custom headers as in the following example.     */
-	//list for custom headers, here we put the our event triggering content
-	//struct curl_slist *header=NULL;
-	//std::string content="Content: ";
-	//add custom headers from above NOTE: do not append crlf at the end, is done automatically
-	//header=curl_slist_append(header, content.c_str());
-	//set custom set of headers from list above
-	//curl_easy_setopt(handle, CURLOPT_HTTPHEADER, header);
+
 
 	//tell curl to use custom function to handle return data insteat of writing it to stdout
 	curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, write_data);
 	//use http protocol, is default anyway so just to make sure
 	curl_easy_setopt(handle, CURLOPT_PROTOCOLS, CURLPROTO_HTTP);
+	//set http GET as default method, will be changed in case, this is necessary when using CURLOPT_CUSTOMREQUES
+	curl_easy_setopt(handle, CURLOPT_CUSTOMREQUEST, NULL);
+	curl_easy_setopt(handle, CURLOPT_HTTPGET, 1L);
 
     for(int j=0;j<rule->body.content.size();j++){
     	switch(rule->body.contentModifierHTTP[j]){
-        			//TODO: its probably faster to encode method to something like int to avoid string comparison
 					case 1:{//http_method
 							if(rule->body.content[j]=="GET"){
 								curl_easy_setopt(handle, CURLOPT_HTTPGET, 1L);
@@ -582,7 +577,11 @@ int sendRulePacket(snortRule* rule, CURL *handle, std::string host){
 					case 4:{//http_stat_msg
 							fprintf(stderr,"can not control server responses, please leave this rule (sid: %s) away",rule->body.sid.c_str()); exit(0);
 							break;
+					}default:{
+						fprintf(stderr,"Content modifier unsupported! Aborting");
+						exit(0);
 					}
+
     	}
     }
     //make sure there are no double / in hostUri and prepend the host to the uri (curl divides both when doing http)
@@ -590,8 +589,23 @@ int sendRulePacket(snortRule* rule, CURL *handle, std::string host){
     	hostUri.erase(0,1);
     }
     hostUri.insert(0,host+"/");
+
+	//list for custom headers, here we put the sid number to correlate the request with a rule
+	struct curl_slist *header=NULL;
+	std::string content="Rulesid: ";
+	content=content+rule->body.sid.c_str();
+	//add custom headers from above NOTE: do not append crlf at the end, is done automatically
+	header=curl_slist_append(header, content.c_str());
+	//set custom set of headers from list above
+	curl_easy_setopt(handle, CURLOPT_HTTPHEADER, header);
+
     //tell curl which host and uri to use
     curl_easy_setopt(handle, CURLOPT_URL, hostUri.c_str());
+    if(verbose){
+    	curl_easy_setopt(handle, CURLOPT_VERBOSE, 1L);
+    }
+    //set request timeout in secs
+    curl_easy_setopt(handle, CURLOPT_TIMEOUT, 1L);
     //do it!
 	result=curl_easy_perform(handle);
 	if(result != CURLE_OK){
@@ -622,6 +636,7 @@ int main (int argc, char* argv[]) {
     bool printRules=false;
     bool sendPackets=false;
     bool pushRule=true;
+    bool verbose=false;
 
     int linecounter=0,index=0,iarg=0;
     snortRule tempRule;
@@ -655,11 +670,12 @@ int main (int argc, char* argv[]) {
     	        {"print",    no_argument,        0, 'p'},
     	        {"help",     no_argument,        0, 'h'},
 				{"response", no_argument,    	 0, 'r'},
+				{"verbose",  no_argument,    	 0, 'v'},
     	        {"server",   required_argument,  0, 's'},
     			{"file",     required_argument,  0, 'f'},
     	        {0,			 0,					 0,  0},
     	};
-        iarg = getopt_long_only(argc, argv, "s:f:prh", longOptions, &index);
+        iarg = getopt_long_only(argc, argv, "s:f:prhv", longOptions, &index);
         //printf("iarg: %d\n",iarg);
         if (iarg == -1){
             break;}
@@ -670,6 +686,10 @@ int main (int argc, char* argv[]) {
         	case 'p':
         		printRules=true;
         		std::cout << "Configured to print parsed rules\n";
+    			break;
+        	case 'v':
+        		verbose=true;
+        		std::cout << "Configured with verbose output\n";
     			break;
         	case 'r':
         		printResponse=true;
@@ -789,7 +809,7 @@ int main (int argc, char* argv[]) {
 
     if(sendPackets){
 		for(unsigned long i=0;i<parsedRules.size();i++){
-			sendRulePacket(&parsedRules[i],easyHandle,host);
+			sendRulePacket(&parsedRules[i],easyHandle,host,verbose);
 		}
     }else{
     	std::cout << "Not sending out packets\n";
