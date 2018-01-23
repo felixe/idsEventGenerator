@@ -55,6 +55,7 @@ class ruleBody{
     //5:http_stat_code
     std::vector<std::string> pcre;
     std::vector<bool> negatedPcre;
+    std::vector<bool> pcreNocase;
     std::string sid;
     std::string rev;
 };
@@ -78,21 +79,34 @@ void parsingError(int line, std::string parsingPart){
 }
 
 /**
+ * counts single rule fields (-->content vectors size) and checks if numbers match
+ * if this check fails something went terribly wrong while parsing!!!
+ */
+void plausabilityCheck(snortRule* rule, int *linenumber){
+	//plausability checks:
+	    if(rule->body.content.size()!=rule->body.contentOriginal.size()
+	    ||rule->body.content.size()!=rule->body.negatedContent.size()
+	    ||rule->body.content.size()!=rule->body.containsHex.size()
+		//the pcre http modifiers are written into the contentModifierHTTP
+	    ||(rule->body.content.size()+rule->body.pcre.size())!=rule->body.contentModifierHTTP.size()
+	    ||rule->body.content.size()!=rule->body.contentNocase.size()
+	    ||rule->body.negatedPcre.size()!=rule->body.pcre.size()
+		||rule->body.pcreNocase.size()!=rule->body.pcre.size()){
+	        fprintf(stderr,"\n\nThere was an Error in rule parsing at line %d, parsed content vectors do not match in size. This should not have happened. Aborting!\n",*linenumber);
+	        fprintf(stderr,"content: %lu, contentOriginal: %lu, pcre: %lu, negatedPcre: %lu, pcreNocase: %lu, negatedContent: %lu, containsHex: %lu, ContentModifierHttp: %lu\n",rule->body.content.size(),rule->body.contentOriginal.size(),rule->body.pcre.size(),rule->body.negatedPcre.size(),rule->body.pcreNocase.size(),rule->body.negatedContent.size(),rule->body.containsHex.size(),rule->body.contentModifierHTTP.size());
+	        exit(1);
+	    }
+}
+
+/**
 *prints snortRule struct to stdout
 */
 void printSnortRule(snortRule* rule){
 	std::string modifierHttp;
-    //plausability checks:
-    if(rule->body.content.size()!=rule->body.contentOriginal.size()
-    ||rule->body.content.size()!=rule->body.negatedContent.size()
-    ||rule->body.content.size()!=rule->body.containsHex.size()
-    ||rule->body.content.size()!=rule->body.contentModifierHTTP.size()
-    ||rule->body.content.size()!=rule->body.contentNocase.size()
-    ||rule->body.negatedPcre.size()!=rule->body.pcre.size()){
-        fprintf(stderr,"\n\nThere was an Error in rule parsing, parsed content vectors do not match in size. This should not have happened. Aborting!\n");
-        fprintf(stderr,"content: %lu, contentOriginal: %lu, negatedContent: %lu, containsHex: %lu, ContentModifierHttp: %lu\n",rule->body.content.size(),rule->body.contentOriginal.size(),rule->body.negatedContent.size(),rule->body.containsHex.size(),rule->body.contentModifierHTTP.size());
-        exit(1);
-    }
+
+	//is already done in main(), so basically superfluous. But for some cases (mass checks) I might comment it there, so a "backup" here.
+	int dummyInt=-1;
+	plausabilityCheck(rule, &dummyInt);
 
     fprintf(stdout,"Message:\t\t\t%s\n",rule->body.msg.c_str());
     fprintf(stdout,"Header:\t\t\t\t%s\n",rule->header.c_str());
@@ -116,7 +130,7 @@ void printSnortRule(snortRule* rule){
                 	case 4: modifierHttp="http_stat_msg"; break;
                 	case 5: modifierHttp="http_stat_code"; break;
                 	case 6: modifierHttp="http_header"; break;
-                	default: fprintf(stderr,"IpfixIds: Wrong content modifier HTTP encoding. Aborting!\n"); exit(0);
+                	default: fprintf(stderr,"IpfixIds: Wrong internal content modifier HTTP encoding. Aborting!\n"); exit(0);
                 }
         fprintf(stdout,"ContentModifierHttp:\t\t%s\n",modifierHttp.c_str());
         if(rule->body.contentNocase[i]==true){
@@ -132,6 +146,17 @@ void printSnortRule(snortRule* rule){
             fprintf(stdout,"NOT ");
         }
         fprintf(stdout,"pcre:\t\t\t\t%s\n",rule->body.pcre[j].c_str());
+        switch(rule->body.contentModifierHTTP.at(j)){
+                        	case 0: modifierHttp=""; break;
+                        	case 1: modifierHttp="http_method"; break;
+                        	case 2: modifierHttp="http_uri"; break;
+                        	case 3: modifierHttp="http_raw_uri"; break;
+                        	case 4: modifierHttp="http_stat_msg"; break;
+                        	case 5: modifierHttp="http_stat_code"; break;
+                        	case 6: modifierHttp="http_header"; break;
+                        	default: fprintf(stderr,"IpfixIds: Wrong internal content modifier HTTP encoding. Aborting!\n"); exit(0);
+                        }
+                fprintf(stdout,"pcreModifierHttp:\t\t%s\n",modifierHttp.c_str());
     }
 
     fprintf(stdout,"sid:\t\t\t\t%s\n",rule->body.sid.c_str());
@@ -434,7 +459,7 @@ void parseContentModifier(std::string* line, int* linecounter, snortRule* tempRu
             }else if(temp=="http_stat_code"){
             	//fprintf(stderr,"SnortRuleparser: content modifier http_stat_code not supported in this version\n"); //just uncomment lines to support it
             	tempRule->body.contentModifierHTTP.push_back(5);
-            }else if(temp=="http_header"){
+            }else if(temp=="http_header"){//BEWARE: this is not supported in Vermont because no IPFIX IE for http header exists
             	//fprintf(stderr,"SnortRuleparser: content modifier http_header not supported in this version\n"); //just uncomment lines to support it
             	tempRule->body.contentModifierHTTP.push_back(6);
             }
@@ -454,27 +479,29 @@ void parseContentModifier(std::string* line, int* linecounter, snortRule* tempRu
 }
 
 /**
-* parses pcre patterns in given line and writes it to given tempRule class in the corresponding vector
-* TODO: needs to be improved: does pcre allow content modifiers? at the moment none are parsed, but there are vector length checks that expect a modifier for each pcre
-* TODO: at the moment unused
+* parses pcre patterns in given line and writes it to given tempRule class in the corresponding vectors
 */
 void parsePcre(std::string* line, int* linecounter, snortRule* tempRule){
     std::size_t startPosition;
     std::size_t endPosition;
+    std::size_t iPosition;
     //we have to copy the line because we are messing around with it
     std::string lineCopy=*line;
-    //this string is the same as line copy, only quotet text is replaces by X. length is the same!
+    //this string is the same as line copy, only quoted text is replaces by X. length is the same!
     std::string lineCopySearch=replaceQuotedText(&lineCopy);
+    std::string pcreModifierString;
     std::string pcreString;
+    std::string temp;
 
-    //on the first check there should definitively be at least on content
+    //on the first check there should definitively be at least one pcre
     startPosition=lineCopySearch.find("pcre:",bodyStartPosition)+5;
     endPosition=lineCopySearch.find(";",startPosition);
-
+    //if not throw an error
     if(startPosition==(std::string::npos+5)||endPosition==std::string::npos){
-        tempRule->body.pcre.push_back("");
+    	parsingError(*linecounter,"pcre");
+    	//next two lines are never reached, but i like em
         tempRule->body.negatedPcre.push_back(false);
-        return;
+        exit(1);
     }
 
     //loop to detect multiple pcre keywords, same check as above is repeated, will be true first time for sure, but we dont want to call parsingError the other times
@@ -489,9 +516,66 @@ void parsePcre(std::string* line, int* linecounter, snortRule* tempRule){
         }else{
             tempRule->body.negatedPcre.push_back(false);
         }
-        //copying pcre string and cutting off quotes
-        pcreString=lineCopy.substr(startPosition+1,endPosition-startPosition-2);
+        //copying pcre string (+snort specific modifiers) and cutting off quotes
+        temp=lineCopy.substr(startPosition+1,endPosition-startPosition-2);
+
+        //avoid any escaped chars by simply looking for the last occurence of / in the (not anymore) quoted pcre string
+        endPosition=temp.find_last_of("/");
+        pcreString=temp.substr(1,endPosition-1);
         tempRule->body.pcre.push_back(pcreString);
+
+        //getting pcre modifiers
+        pcreModifierString=temp.substr(endPosition+1,temp.length()-endPosition);
+
+        //detailed handling of single pcre modifiers
+        iPosition=pcreModifierString.find("i");
+        if(iPosition!=std::string::npos){
+        	tempRule->body.pcreNocase.push_back(true);
+        	pcreModifierString.erase(iPosition,1);
+        }else{
+        	tempRule->body.pcreNocase.push_back(false);
+        }
+
+        //if no modifiers left, no http modifier, so useless:
+        if(pcreModifierString.size()==0){
+        	fprintf(stderr,"\n\nError on line %d, failed to parse pcre modifier: No http modifier for pcre, we need at least one\n",*linecounter);
+        	        	 exit(1);
+        }
+
+        if(pcreModifierString.find("s")!=std::string::npos||pcreModifierString.find("m")!=std::string::npos||pcreModifierString.find("x")!=std::string::npos
+        		||pcreModifierString.find("A")!=std::string::npos||pcreModifierString.find("E")!=std::string::npos||pcreModifierString.find("G")!=std::string::npos
+				||pcreModifierString.find("R")!=std::string::npos||pcreModifierString.find("P")!=std::string::npos||pcreModifierString.find("H")!=std::string::npos
+				||pcreModifierString.find("D")!=std::string::npos||pcreModifierString.find("C")!=std::string::npos||pcreModifierString.find("K")!=std::string::npos
+				||pcreModifierString.find("B")!=std::string::npos||pcreModifierString.find("O")!=std::string::npos){
+        	 fprintf(stderr,"\n\nError on line %d, failed to parse pcre modifier: The Snort specific pcre modifiers s,m,x,A,E,G,R,P,H,D,C,K,B,O are not supported.\n",*linecounter);
+        	 exit(1);
+        }
+        for(std::string::size_type k = 0; k < pcreModifierString.size(); ++k) {
+            switch(pcreModifierString[k]){
+            case 'U':
+            	tempRule->body.contentModifierHTTP.push_back(2);
+            	break;
+            case 'I':
+            	tempRule->body.contentModifierHTTP.push_back(3);
+            	break;
+            case 'M':
+            	tempRule->body.contentModifierHTTP.push_back(1);
+            	break;
+            case 'S':
+            	tempRule->body.contentModifierHTTP.push_back(5);
+            	break;
+            case 'Y':
+            	tempRule->body.contentModifierHTTP.push_back(4);
+            	break;
+            default:
+            	fprintf(stderr,"\n\nError on line %d, failed to parse pcre modifier: There was an uncaught, unsupported snort specific modifier. This should not have happened!\n",*linecounter);
+            	exit(1);
+            }
+        }
+
+        printf("%s\n",temp.c_str());
+        printf("%s\n",pcreString.c_str());
+        printf("%s\n",pcreModifierString.c_str());
 
         //erase pcre keyword from line so that we can move on to next line
         lineCopy.erase(startPosition-5,5);
@@ -545,9 +629,7 @@ int sendRulePacket(snortRule* rule, CURL *handle, std::string host,bool verbose)
     std::size_t doppler;
     std::string hostUri="";
 
-
-
-	//tell curl to use custom function to handle return data insteat of writing it to stdout
+	//tell curl to use custom function to handle return data instead of writing it to stdout
 	curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, write_data);
 	//use http protocol, is default anyway so just to make sure
 	curl_easy_setopt(handle, CURLOPT_PROTOCOLS, CURLPROTO_HTTP);
@@ -583,6 +665,11 @@ int sendRulePacket(snortRule* rule, CURL *handle, std::string host,bool verbose)
 					}
 
     	}
+    }
+
+    for(int k=0;k<rule->body.pcre.size();k++){
+		fprintf(stderr,"Failure with rule sid: %s. Generation of packets from rules with pcre not supported yet.\n",rule->body.sid.c_str()); exit(0);
+		exit(1);
     }
     //make sure there are no double / in hostUri and prepend the host to the uri (curl divides both when doing http)
     while(hostUri.find("/")==0){
@@ -654,6 +741,7 @@ int main (int argc, char* argv[]) {
     tempRule.body.contentModifierHTTP.reserve(VECTORRESERVE);
     tempRule.body.pcre.reserve(VECTORRESERVE);
     tempRule.body.negatedPcre.reserve(VECTORRESERVE);
+    tempRule.body.pcreNocase.reserve(VECTORRESERVE);
     //disable buffering on stdout:
     setbuf(stdout, NULL);
 
@@ -676,7 +764,6 @@ int main (int argc, char* argv[]) {
     	        {0,			 0,					 0,  0},
     	};
         iarg = getopt_long_only(argc, argv, "s:f:prhv", longOptions, &index);
-        //printf("iarg: %d\n",iarg);
         if (iarg == -1){
             break;}
         switch (iarg){
@@ -743,11 +830,9 @@ int main (int argc, char* argv[]) {
                 //sort out rules that we are not interested in
                 if(alertPosition==std::string::npos){
                     fprintf(stdout,"WARNING: Rule in line number %d, does not contain alert keyword. Ignored\n",linecounter);
-                }else if(contentPosition==std::string::npos){
-                	fprintf(stdout,"WARNING: Rule in line number %d, does not contain content keyword. Ignored\n",linecounter);
-                }else if(pcrePosition!=std::string::npos){
-                	fprintf(stdout,"WARNING: Rule in line number %d, contains pcre keyword which is not supported (yet). Ignored\n",linecounter);
-            	}else if(line.find("http_")==std::string::npos){
+                }else if((contentPosition==std::string::npos)&&(pcrePosition!=std::string::npos)){
+                	fprintf(stdout,"WARNING: Rule in line number %d, does not contain content or pcre keyword. Ignored\n",linecounter);
+               	}else if(line.find("http_")==std::string::npos){
                 	fprintf(stdout,"WARNING: Rule in line number %d, does not contain an http_ content modifier. Ignored\n",linecounter);
             	}else if(line.find("http_header")!=std::string::npos){ //but parsing is already implemented
                 	fprintf(stdout,"WARNING: Rule in line number %d, contains an http_header content modifier which is not supported (yet). Ignored\n",linecounter);
@@ -765,19 +850,20 @@ int main (int argc, char* argv[]) {
                         parseContent(&line, &linecounter,&tempRule);
                         parseContentModifier(&line, &linecounter,&tempRule);
                     }
-                    //TODO: ev. uncomment if pcre's are supported again
-                    //no pcre?
-                    //if(pcrePosition!=std::string::npos){
-                    //    parsePcre(&line, &linecounter,&tempRule);
-                    //}
+                    if(pcrePosition!=std::string::npos){
+                        parsePcre(&line, &linecounter,&tempRule);
+                    }
                     parseSid(&line, &linecounter,&tempRule);
-                    //do not allow rules which have no content modifier
+                    //do not allow rules which have no http_ content modifier
 					for (unsigned long i = 0; i < tempRule.body.content.size();i++) {
 						if (tempRule.body.contentModifierHTTP.at(i) == 0) {
 							pushRule = false;
 							fprintf(stdout,"WARNING: Rule in line number %d, contains at least one content without http_* content modifier. Ignored\n",linecounter);
 						}
 					}
+
+					//before pushing rule, check if it makes sense. this will exit() if it fails.
+					plausabilityCheck(&tempRule,&linecounter);
 					if (pushRule) {
 						parsedRules.push_back(tempRule);
 					}
@@ -791,6 +877,10 @@ int main (int argc, char* argv[]) {
             tempRule.body.contentNocase.clear();
             tempRule.body.pcre.clear();
             tempRule.body.negatedPcre.clear();
+            tempRule.body.pcreNocase.clear();
+            tempRule.body.msg.clear();
+            tempRule.body.rev.clear();
+            tempRule.body.sid.clear();
     }
     ruleFile.close();
     }else{
