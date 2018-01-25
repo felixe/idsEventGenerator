@@ -69,8 +69,6 @@ class snortRule {
 std::size_t bodyStartPosition;
 bool printResponse=false;
 
-//TODO
-//convert more than the first 128 ascii character (minus nonprintable chars)
 /**
 * writes error message to stderr
 */
@@ -146,7 +144,7 @@ void printSnortRule(snortRule* rule){
             fprintf(stdout,"NOT ");
         }
         fprintf(stdout,"pcre:\t\t\t\t%s\n",rule->body.pcre[j].c_str());
-        switch(rule->body.contentModifierHTTP.at(j)){
+        switch(rule->body.contentModifierHTTP.at(j+(rule->body.content.size()))){
                         	case 0: modifierHttp=""; break;
                         	case 1: modifierHttp="http_method"; break;
                         	case 2: modifierHttp="http_uri"; break;
@@ -830,10 +828,9 @@ int main (int argc, char* argv[]) {
                 //sort out rules that we are not interested in
                 if(alertPosition==std::string::npos){
                     fprintf(stdout,"WARNING: Rule in line number %d, does not contain alert keyword. Ignored\n",linecounter);
-                }else if((contentPosition==std::string::npos)&&(pcrePosition!=std::string::npos)){
+                }else if((contentPosition==std::string::npos)&&(pcrePosition==std::string::npos)){
                 	fprintf(stdout,"WARNING: Rule in line number %d, does not contain content or pcre keyword. Ignored\n",linecounter);
-               	}else if(line.find("http_")==std::string::npos){
-                	fprintf(stdout,"WARNING: Rule in line number %d, does not contain an http_ content modifier. Ignored\n",linecounter);
+                //check for http_ content modifiers has been moved to parseContent method
             	}else if(line.find("http_header")!=std::string::npos){ //but parsing is already implemented
                 	fprintf(stdout,"WARNING: Rule in line number %d, contains an http_header content modifier which is not supported (yet). Ignored\n",linecounter);
             	}else if(line.find("http_client_body")!=std::string::npos){
@@ -846,10 +843,14 @@ int main (int argc, char* argv[]) {
                     parseHeader(&line,&linecounter,&tempRule);
                     parseMsg(&line,&linecounter,&tempRule);
                     //it might contain no content (just pcre), than skip parseContent
-                    if(contentPosition!=std::string::npos){
-                        parseContent(&line, &linecounter,&tempRule);
-                        parseContentModifier(&line, &linecounter,&tempRule);
-                    }
+					if(contentPosition!=std::string::npos){
+					    if(line.find("http_")==std::string::npos){
+					    	fprintf(stdout,"WARNING: Rule in line number %d contains content keyword but no http_ content modifier. Content part ignored\n", linecounter);
+					    }else{
+					    	parseContent(&line, &linecounter,&tempRule);
+					    	parseContentModifier(&line, &linecounter,&tempRule);
+					    }
+					}
                     if(pcrePosition!=std::string::npos){
                         parsePcre(&line, &linecounter,&tempRule);
                     }
