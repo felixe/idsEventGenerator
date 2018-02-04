@@ -8,7 +8,7 @@ It only parses rules that use one of the following content modifiers: http\_\[me
 It ignores rules that are not triggering an alert or do not contain the 'content' keyword . 
 Be aware that this is rather a READER than a parser as it does not in-depth structure checks!
 
-Build it by executing "g++ -lcurl snortRuleParser.cpp"
+Build it by executing "g++ -std=c++11 -lcurl snortRuleParser.cpp"
 
 Run it by executing "./a.out -f \<snortRuleFile\> -s \<webserver\>"
   

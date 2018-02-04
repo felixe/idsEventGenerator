@@ -22,7 +22,7 @@
  *
  * REMARKS:
  * -If hex chars are encountered (everything between two '|' signs) it is converted to ascii, but only if part of the first 128 ascii chars and only if printable
- * -Whitespace in content patterns with http_uri modifier is generally converted to the + sign, if you want %20 as whitespacethan change it in the rule.
+ * -Whitespace in content patterns with http_uri modifier is generally converted to the + sign, if you want %20 as whitespace than change it in the rule.
  */
 
 #include <iostream>
@@ -34,6 +34,7 @@
 #include <locale>
 #include <curl/curl.h>
 #include <getopt.h>
+#include <regex>
 
 #define VECTORRESERVE 10
 
@@ -157,8 +158,15 @@ void printSnortRule(snortRule* rule){
                         	case 6: modifierHttp="http_header"; break;
                         	default: fprintf(stderr,"IpfixIds: Wrong internal content modifier HTTP encoding. Aborting!\n"); exit(0);
                         }
-                fprintf(stdout,"pcreModifierHttp:\t\t%s\n",modifierHttp.c_str());
+		fprintf(stdout,"pcreModifierHttp:\t\t%s\n",modifierHttp.c_str());
+		if(rule->body.pcreNocase[j]==true){
+					fprintf(stdout,"NocasePcre:\t\t\ttrue\n");
+				}else{
+					fprintf(stdout,"NocasePcre:\t\t\tfalse\n");
+				}
+
     }
+
 
     fprintf(stdout,"sid:\t\t\t\t%s\n",rule->body.sid.c_str());
     fprintf(stdout,"sid rev:\t\t\t%s\n",rule->body.rev.c_str());
@@ -630,14 +638,24 @@ size_t write_data(void *buffer, size_t size, size_t nmemb, void *userp){
         return size*nmemb;
 }
 
+/**
+ * replaces string 'from' in string 'in' to 'to'
+ */
+std::string stringReplace(std::string const &in, std::string const &from, std::string const &to){
+  return std::regex_replace( in, std::regex(from), to );
+}
 
 /**
  * sends an HTTP request to the given host containing the pattern(s) of the given rule
  */
-int sendRulePacket(snortRule* rule, CURL *handle, std::string host,bool verbose){
+void sendRulePacket(snortRule* rule, CURL *handle, std::string host,bool verbose){
     CURLcode result;
     std::size_t doppler;
     std::string hostUri="";
+    FILE *commandFile;
+	const int BUFSIZE = 1000;
+	char buf[ BUFSIZE ];
+
 
 	//tell curl to use custom function to handle return data instead of writing it to stdout
 	curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, write_data);
@@ -646,9 +664,8 @@ int sendRulePacket(snortRule* rule, CURL *handle, std::string host,bool verbose)
 	//set http GET as default method, will be changed in case, this is necessary when using CURLOPT_CUSTOMREQUES
 	curl_easy_setopt(handle, CURLOPT_CUSTOMREQUEST, NULL);
 	curl_easy_setopt(handle, CURLOPT_HTTPGET, 1L);
-
     for(int j=0;j<rule->body.content.size();j++){
-    	switch(rule->body.contentModifierHTTP[j]){
+    	switch(rule->body.contentModifierHTTP.at(j)){
 					case 1:{//http_method
 							if(rule->body.content[j]=="GET"){
 								curl_easy_setopt(handle, CURLOPT_HTTPGET, 1L);
@@ -667,7 +684,8 @@ int sendRulePacket(snortRule* rule, CURL *handle, std::string host,bool verbose)
 					}
 					//TODO: check if this keyword is present in rules and possibly leave this check away if not
 					case 4:{//http_stat_msg
-							fprintf(stderr,"can not control server responses, please leave this rule (sid: %s) away",rule->body.sid.c_str()); exit(0);
+							fprintf(stderr,"can not control server responses, please leave this rule (sid: %s) away",rule->body.sid.c_str());
+							exit(0);
 							break;
 					}default:{
 						fprintf(stderr,"Content modifier unsupported! Aborting");
@@ -676,18 +694,67 @@ int sendRulePacket(snortRule* rule, CURL *handle, std::string host,bool verbose)
 
     	}
     }
-
-    //implement pcre payload generation
-
+    //pcre payload generation with the help of an external perl script. This script MUST be present in the same folder as this executable file.
     for(int k=0;k<rule->body.pcre.size();k++){
-		fprintf(stderr,"Failure with rule sid: %s. Generation of packets from rules with pcre not supported yet.\n",rule->body.sid.c_str());
-		return -1;
+    	//the problem with negated pcre is that also modifiers are negated, meaning U means everything BUT http uri...
+    	if(rule->body.negatedPcre.at(k)==true){
+    		fprintf(stderr,"IpfixIds: Rule with sid: %s contains a negated pcre. This is not implemented and is foolishly inexpensive, such a rule should not be used",rule->body.sid.c_str());
+    		exit(-1);
+    	}
+    	//we dont have to care about nocasePcre because chars will be generated exactly how given in pcre...
+
+    	//look for illegal chars. the perl script can not handle them (yes, a perl lib can not handle certain pcre chars!!)
+    	if(rule->body.pcre.at(k).find("^")!=std::string::npos||rule->body.pcre.at(k).find("$")!=std::string::npos||rule->body.pcre.at(k).find("=")!=std::string::npos
+    			||rule->body.pcre.at(k).find("(")!=std::string::npos||rule->body.pcre.at(k).find(")")!=std::string::npos||rule->body.pcre.at(k).find("?")!=std::string::npos
+				||rule->body.pcre.at(k).find("|")!=std::string::npos||rule->body.pcre.at(k).find("\\")!=std::string::npos||rule->body.pcre.at(k).find("@")!=std::string::npos){
+    		fprintf(stderr,"Following literals are not supported for generating pcre payload: ^,$,=,(,),?,|,\\,@. Skipping pcre payload, rest will be send but it might not be what you want.\n");
+    		}else{
+			std::string command="./regexStringGenerator.perl ";
+			std::string commandArgument=rule->body.pcre.at(k);
+
+			std::string popenCommand=command+commandArgument;
+			//this opens a shell and executes above command (script), if script is not found a line is written and program continues
+			commandFile = popen( popenCommand.c_str(), "r" );
+				if ( commandFile == NULL ) {
+					fprintf( stderr, "Could not execute command to generate regex payload.\n" );
+					return;
+				}
+
+				while( fgets( buf, BUFSIZE,  commandFile )) {
+					//fprintf( stdout, "%s", buf  );
+				}
+				std::string pcrePayload=buf;
+				//strange newlines are introduced, remove them
+				pcrePayload.erase(std::remove(pcrePayload.begin(), pcrePayload.end(), '\n'), pcrePayload.end());
+				pclose( commandFile );
+
+			switch(rule->body.contentModifierHTTP.at(rule->body.content.size()+k)){
+				case 1:{//http_method
+						curl_easy_setopt(handle, CURLOPT_CUSTOMREQUEST, pcrePayload.c_str());
+						break;
+				}case 2://http_uri
+				case 3:{//http_raw_uri
+						hostUri=hostUri+pcrePayload;
+						break;
+				}case 4:{//http_stat_msg
+						fprintf(stderr,"can not control server responses, please leave this rule (sid: %s) away",rule->body.sid.c_str());
+						exit(0);
+						break;
+				}default:{
+						fprintf(stderr,"Pcre Content modifier unsupported! Aborting");
+						exit(0);
+				}
+			}//switch
+    	}
     }
     //make sure there are no double / in hostUri and prepend the host to the uri (curl divides both when doing http)
     while(hostUri.find("/")==0){
     	hostUri.erase(0,1);
     }
     hostUri.insert(0,host+"/");
+
+    //escape unsupported chars in uri string --> not necessary
+    //hostUri=stringReplace(hostUri,"@","\\@");
 
 	//list for custom headers, here we put the sid number to correlate the request with a rule
 	struct curl_slist *header=NULL;
@@ -708,10 +775,9 @@ int sendRulePacket(snortRule* rule, CURL *handle, std::string host,bool verbose)
     //do it!
 	result=curl_easy_perform(handle);
 	if(result != CURLE_OK){
-			fprintf(stderr, "curl_easy_perform() failed: %s\n",curl_easy_strerror(result));
-			return -1;
+			fprintf(stderr, "curl_easy_perform() failed for packet from rule sid %s, with url %s, with error: %s\n",rule->body.sid.c_str(),hostUri.c_str(), curl_easy_strerror(result));
+			return;
 	}
-
 }
 
 /**
@@ -856,7 +922,7 @@ int main (int argc, char* argv[]) {
             	}else if(line.find("flowbits:")!=std::string::npos||line.find("distance:")!=std::string::npos||line.find("within:")!=std::string::npos||line.find("offset:")!=std::string::npos||line.find("depth:")!=std::string::npos){
             		fprintf(stdout,"WARNING:: Rule in line number %d, contains keyword for byte ranges (flowbits,distance,within,depth,offset) which is not supported (yet). Ignored",linecounter);
             	}else if(line.find("dce_")!=std::string::npos||line.find("threshold:")!=std::string::npos||line.find("urilen:")!=std::string::npos){
-            		fprintf(stdout,"WARNING:: Rule in line number %d, contains one of the following not supported keywords: dce_\*, threshold:, urilen. Ignored",linecounter);
+            		fprintf(stdout,"WARNING:: Rule in line number %d, contains one of the following not supported keywords: dce_*, threshold:, urilen. Ignored",linecounter);
 				}else{
                     parseHeader(&line,&linecounter,&tempRule);
                     parseMsg(&line,&linecounter,&tempRule);
