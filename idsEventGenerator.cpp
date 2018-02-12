@@ -73,7 +73,7 @@ bool printResponse=false;
 * writes error message to stderr
 */
 void parsingError(int line, std::string parsingPart){
-    fprintf(stderr,"\n\nError on line %d, failed to parse %s. This does not seem to be a valid Snort rule. Aborting!\n",line, parsingPart.c_str());
+    fprintf(stderr,"Error on line %d, failed to parse %s. This does not seem to be a valid Snort rule. Aborting!\n",line, parsingPart.c_str());
 }
 
 /**
@@ -476,11 +476,19 @@ void parseContentModifier(std::string* line, int* linecounter, snortRule* tempRu
 						//fprintf(stderr,"SnortRuleparser: content modifier http_stat_msg not supported in this version\n"); //just uncomment lines to support it
 						tempRule->body.contentModifierHTTP.push_back(4);
 				}else if(temp=="http_stat_code"){
-						//fprintf(stderr,"SnortRuleparser: content modifier http_stat_code not supported in this version\n"); //just uncomment lines to support it
 						tempRule->body.contentModifierHTTP.push_back(5);
 				}else if(temp=="http_header"){//BEWARE: this is not supported in Vermont because no IPFIX IE for http header exists
-						//fprintf(stderr,"SnortRuleparser: content modifier http_header not supported in this version\n"); //just uncomment lines to support it
 						tempRule->body.contentModifierHTTP.push_back(6);
+				}else if(temp=="http_raw_header"){//BEWARE: this is not supported in Vermont because no IPFIX IE for http header exists
+						tempRule->body.contentModifierHTTP.push_back(7);
+				}else if(temp=="http_client_body"){//BEWARE: this is not supported in Vermont because no IPFIX IE for http header exists
+						tempRule->body.contentModifierHTTP.push_back(8);
+				}else if(temp=="http_cookie"){//BEWARE: this is not supported in Vermont because no IPFIX IE for http header exists
+						tempRule->body.contentModifierHTTP.push_back(9);
+				}else if(temp=="http_raw_cookie"){//BEWARE: this is not supported in Vermont because no IPFIX IE for http header exists
+						tempRule->body.contentModifierHTTP.push_back(10);
+				}else{
+					parsingError(*linecounter,"unrecognized content modifier");
 				}
 		}
 	}//if uricontent
@@ -557,37 +565,51 @@ void parsePcre(std::string* line, int* linecounter, snortRule* tempRule){
 
         //if no modifiers left, no http modifier, so useless:
         if(pcreModifierString.size()==0){
-        	fprintf(stderr,"\n\nError on line %d, failed to parse pcre modifier: No http modifier for pcre, we need at least one\n",*linecounter);
-        	        	 exit(1);
+        	fprintf(stderr,"Error with rule sid:%s on line %d, failed to parse pcre modifier: No http modifier for pcre, we need at least one\n",tempRule->body.sid.c_str(),*linecounter);
+        	exit(1);
         }
 
         if(pcreModifierString.find("s")!=std::string::npos||pcreModifierString.find("m")!=std::string::npos||pcreModifierString.find("x")!=std::string::npos
-        		||pcreModifierString.find("A")!=std::string::npos||pcreModifierString.find("E")!=std::string::npos||pcreModifierString.find("G")!=std::string::npos
-				||pcreModifierString.find("R")!=std::string::npos||pcreModifierString.find("P")!=std::string::npos||pcreModifierString.find("H")!=std::string::npos
-				||pcreModifierString.find("D")!=std::string::npos||pcreModifierString.find("C")!=std::string::npos||pcreModifierString.find("K")!=std::string::npos
+        		||pcreModifierString.find("A")!=std::string::npos||pcreModifierString.find("E")!=std::string::npos
+				||pcreModifierString.find("G")!=std::string::npos||pcreModifierString.find("R")!=std::string::npos
 				||pcreModifierString.find("B")!=std::string::npos||pcreModifierString.find("O")!=std::string::npos){
-        	 fprintf(stderr,"\n\nError on line %d, failed to parse pcre modifier: The Snort specific pcre modifiers s,m,x,A,E,G,R,P,H,D,C,K,B,O are not supported.\n",*linecounter);
+        	 fprintf(stderr,"Error with rule sid:%s on line %d, failed to parse pcre modifier: The Snort specific (non HTTP) pcre modifiers s,m,x,A,E,G,R,B,O are not supported.\n",tempRule->body.sid.c_str(),*linecounter);
         	 exit(1);
         }
         for(std::string::size_type k = 0; k < pcreModifierString.size(); ++k) {
             switch(pcreModifierString[k]){
-            case 'U':
+            case 'P'://client body
+            	tempRule->body.contentModifierHTTP.push_back(8);
+            	break;
+            case 'H'://http header 6
+            	tempRule->body.contentModifierHTTP.push_back(6);
+				break;
+            case 'D'://raw_header 7
+            	tempRule->body.contentModifierHTTP.push_back(7);
+				break;
+            case 'C'://cookie 9
+            	tempRule->body.contentModifierHTTP.push_back(9);
+				break;
+            case 'K'://raw cookie 19
+            	tempRule->body.contentModifierHTTP.push_back(10);
+            	break;
+            case 'U'://uri
             	tempRule->body.contentModifierHTTP.push_back(2);
             	break;
-            case 'I':
+            case 'I'://raw uri
             	tempRule->body.contentModifierHTTP.push_back(3);
             	break;
-            case 'M':
+            case 'M'://method
             	tempRule->body.contentModifierHTTP.push_back(1);
             	break;
-            case 'S':
+            case 'S'://response code
             	tempRule->body.contentModifierHTTP.push_back(5);
             	break;
-            case 'Y':
+            case 'Y'://response message
             	tempRule->body.contentModifierHTTP.push_back(4);
             	break;
             default:
-            	fprintf(stderr,"\n\nError on line %d, failed to parse pcre modifier: There was an uncaught, unsupported snort specific modifier. This should not have happened!\n",*linecounter);
+            	fprintf(stderr,"Error with rule sid:%s on line %d, failed to parse pcre modifier: There was an uncaught, unsupported snort specific modifier. This should not have happened!\n",tempRule->body.sid.c_str(),*linecounter);
             	exit(1);
             }
         }
@@ -910,22 +932,16 @@ int main (int argc, char* argv[]) {
                     fprintf(stdout,"WARNING: Rule in line number %d, does not contain alert keyword. Ignored\n",linecounter);
                 }else if((contentPosition==std::string::npos)&&(pcrePosition==std::string::npos)){
                 	fprintf(stdout,"WARNING: Rule in line number %d, does not contain content or pcre keyword. Ignored\n",linecounter);
-                //check for http_ content modifiers has been moved to parseContent method
-            	}else if(line.find("http_header")!=std::string::npos){ //but parsing is already implemented
-                	fprintf(stdout,"WARNING: Rule in line number %d, contains an http_header content modifier which is not supported (yet). Ignored\n",linecounter);
-            	}else if(line.find("http_client_body")!=std::string::npos){
-            	    fprintf(stdout,"WARNING: Rule in line number %d, contains an http_client_body content modifier which is not supported (yet). Ignored\n",linecounter);
-            	}else if(line.find("http_cookie")!=std::string::npos){
-            	    fprintf(stdout,"WARNING: Rule in line number %d, contains an http_cookie content modifier which is not supported (yet). Ignored\n",linecounter);
-            	}else if(line.find("http_raw_header")!=std::string::npos){
-            	    fprintf(stdout,"WARNING: Rule in line number %d, contains an http_raw_header content modifier which is not supported (yet). Ignored\n",linecounter);
             	}else if(line.find("flowbits:")!=std::string::npos||line.find("distance:")!=std::string::npos||line.find("within:")!=std::string::npos||line.find("offset:")!=std::string::npos||line.find("depth:")!=std::string::npos){
-            		fprintf(stdout,"WARNING:: Rule in line number %d, contains keyword for byte ranges (flowbits,distance,within,depth,offset) which is not supported (yet). Ignored",linecounter);
+            		fprintf(stdout,"WARNING:: Rule in line number %d, contains keyword for byte ranges (flowbits,distance,within,depth,offset) which is not supported (yet). Ignored\n",linecounter);
             	}else if(line.find("dce_")!=std::string::npos||line.find("threshold:")!=std::string::npos||line.find("urilen:")!=std::string::npos){
-            		fprintf(stdout,"WARNING:: Rule in line number %d, contains one of the following not supported keywords: dce_*, threshold:, urilen. Ignored",linecounter);
+            		fprintf(stdout,"WARNING:: Rule in line number %d, contains one of the following not supported keywords: dce_*, threshold:, urilen. Ignored\n",linecounter);
 				}else{
+					//parse sid first, so we can print this info in error msgs
+					parseSid(&line, &linecounter,&tempRule);
                     parseHeader(&line,&linecounter,&tempRule);
                     parseMsg(&line,&linecounter,&tempRule);
+
                     //it might contain no content (just pcre), than skip parseContent
 					if(contentPosition!=std::string::npos){
 						//if uricontent, skip next test because no http_ is intended
@@ -940,12 +956,12 @@ int main (int argc, char* argv[]) {
                     if(pcrePosition!=std::string::npos){
                         parsePcre(&line, &linecounter,&tempRule);
                     }
-                    parseSid(&line, &linecounter,&tempRule);
+
                     //do not allow rules which have no http_ content modifier
 					for (unsigned long i = 0; i < tempRule.body.content.size();i++) {
 						if (tempRule.body.contentModifierHTTP[i] == 0) {
 							pushRule = false;
-							fprintf(stdout,"WARNING: Rule in line number %d, contains at least one content without http_* content modifier. Ignored\n",linecounter);
+							fprintf(stdout,"WARNING: Rule with sid:%s in line number %d, contains at least one content without http_* content modifier. Ignored\n", tempRule.body.sid.c_str(), linecounter);
 						}
 					}
 
