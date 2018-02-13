@@ -132,6 +132,10 @@ void printSnortRule(snortRule* rule){
                 	case 4: modifierHttp="http_stat_msg"; break;
                 	case 5: modifierHttp="http_stat_code"; break;
                 	case 6: modifierHttp="http_header"; break;
+                	case 7: modifierHttp="http_raw_header"; break;
+                	case 8: modifierHttp="http_client_body"; break;
+                	case 9: modifierHttp="http_cookie"; break;
+                	case 10: modifierHttp="http_raw_cookie"; break;
                 	default: fprintf(stderr,"IpfixIds: Wrong internal content modifier HTTP encoding. Aborting!\n"); exit(0);
                 }
         fprintf(stdout,"ContentModifierHttp:\t\t%s\n",modifierHttp.c_str());
@@ -156,7 +160,11 @@ void printSnortRule(snortRule* rule){
                         	case 4: modifierHttp="http_stat_msg"; break;
                         	case 5: modifierHttp="http_stat_code"; break;
                         	case 6: modifierHttp="http_header"; break;
-                        	default: fprintf(stderr,"IpfixIds: Wrong internal content modifier HTTP encoding. Aborting!\n"); exit(0);
+                        	case 7: modifierHttp="http_raw_header"; break;
+                        	case 8: modifierHttp="http_client_body"; break;
+                        	case 9: modifierHttp="http_cookie"; break;
+                        	case 10: modifierHttp="http_raw_cookie"; break;
+                        	default: fprintf(stderr,"IpfixIds: Wrong internal pcre content modifier HTTP encoding. Aborting!\n"); exit(0);
                         }
 		fprintf(stdout,"pcreModifierHttp:\t\t%s\n",modifierHttp.c_str());
 		if(rule->body.pcreNocase[j]==true){
@@ -166,7 +174,6 @@ void printSnortRule(snortRule* rule){
 				}
 
     }
-
 
     fprintf(stdout,"sid:\t\t\t\t%s\n",rule->body.sid.c_str());
     fprintf(stdout,"sid rev:\t\t\t%s\n",rule->body.rev.c_str());
@@ -312,6 +319,8 @@ void parseContent(std::string* line, int* linecounter, snortRule* tempRule){
         }else{
             tempRule->body.negatedContent.push_back(false);
         }
+
+        //we dont have to check for uricontent here because we can take care the same way we do for content. we have to take special care in parseContentModifier
 
         contentOrig=lineCopy.substr(startPosition,(endPosition-startPosition));
         //cut away quotes
@@ -526,8 +535,6 @@ void parsePcre(std::string* line, int* linecounter, snortRule* tempRule){
     //if not throw an error
     if(startPosition==(std::string::npos+5)||endPosition==std::string::npos){
     	parsingError(*linecounter,"pcre");
-    	//next two lines are never reached, but i like em
-        tempRule->body.negatedPcre.push_back(false);
         exit(1);
     }
 
@@ -683,7 +690,7 @@ void sendRulePacket(snortRule* rule, CURL *handle, std::string host,bool verbose
 	curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, write_data);
 	//use http protocol, is default anyway so just to make sure
 	curl_easy_setopt(handle, CURLOPT_PROTOCOLS, CURLPROTO_HTTP);
-	//set http GET as default method, will be changed in case, this is necessary when using CURLOPT_CUSTOMREQUES
+	//set http GET as default method, will be changed in case, this is necessary when using CURLOPT_CUSTOMREQUEST
 	curl_easy_setopt(handle, CURLOPT_CUSTOMREQUEST, NULL);
 	curl_easy_setopt(handle, CURLOPT_HTTPGET, 1L);
     for(int j=0;j<rule->body.content.size();j++){
@@ -699,18 +706,32 @@ void sendRulePacket(snortRule* rule, CURL *handle, std::string host,bool verbose
 							}
 							break;
 					}
-					case 2:	//http_uri
-					case 3:{//http_raw_uri
-							hostUri=hostUri+rule->body.content[j].c_str();
+					case 2://http_uri
+					case 3://http_raw_uri
+					case 6://http_header, uri is part of header...
+					case 7://http_raw_header
+							{hostUri=hostUri+rule->body.content[j].c_str();
 							break;
 					}
-					//TODO: check if this keyword is present in rules and possibly leave this check away if not
-					case 4:{//http_stat_msg
-							fprintf(stderr,"can not control server responses, please leave this rule (sid: %s) away",rule->body.sid.c_str());
+					case 4://http_stat_msg
+					case 5:
+							{fprintf(stderr,"Can not control server responses, please remove this rule (sid: %s)\n",rule->body.sid.c_str());
 							exit(0);
 							break;
-					}default:{
-						fprintf(stderr,"Content modifier unsupported! Aborting");
+					}
+					case 8: //client_body. This possibly adds a body also to GET requests, which is not illegal but useless because server is not allowed to interpret it.
+							{curl_easy_setopt(handle, CURLOPT_POSTFIELDS, rule->body.content[j].c_str());
+							break;
+					}
+					case 9://cookie
+					case 10://raw_cookie
+							{//this way it only copies the value from the rule, meaning it might NOT result in a name=value pair.
+							 //this is still legal and accepted by servers.
+								curl_easy_setopt(handle, CURLOPT_COOKIE, rule->body.content[j].c_str());
+							break;
+					}
+					default:{
+						fprintf(stderr,"HTTP content modifier unsupported! Aborting\n");
 						exit(0);
 					}
 
@@ -731,6 +752,7 @@ void sendRulePacket(snortRule* rule, CURL *handle, std::string host,bool verbose
 				||rule->body.pcre.at(k).find("|")!=std::string::npos||rule->body.pcre.at(k).find("\\")!=std::string::npos||rule->body.pcre.at(k).find("@")!=std::string::npos){
     		fprintf(stderr,"Following literals are not supported for generating pcre payload: ^,$,=,(,),?,|,\\,@. Skipping pcre payload, rest will be send but it might not be what you want.\n");
     		}else{
+    			//hardcoded script name. Of course, this script must exist!!!
 			std::string command="./regexStringGenerator.perl ";
 			std::string commandArgument=rule->body.pcre.at(k);
 
@@ -754,16 +776,34 @@ void sendRulePacket(snortRule* rule, CURL *handle, std::string host,bool verbose
 				case 1:{//http_method
 						curl_easy_setopt(handle, CURLOPT_CUSTOMREQUEST, pcrePayload.c_str());
 						break;
-				}case 2://http_uri
-				case 3:{//http_raw_uri
-						hostUri=hostUri+pcrePayload;
+				}
+				case 2://http_uri
+				case 3://http_raw_uri
+				case 6://header
+				case 7://raw_header
+						{hostUri=hostUri+pcrePayload;
 						break;
-				}case 4:{//http_stat_msg
-						fprintf(stderr,"can not control server responses, please leave this rule (sid: %s) away",rule->body.sid.c_str());
+				}
+				case 4://http_stat_msg
+				case 5://http_stat_code
+						{fprintf(stderr,"can not control server responses, please remove this rule (sid: %s)\n",rule->body.sid.c_str());
 						exit(0);
 						break;
-				}default:{
-						fprintf(stderr,"Pcre Content modifier unsupported! Aborting");
+				}
+				case 8://client_body. This possibly adds a body also to GET requests, which is not illegal but useless because server is not allowed to interpret it.
+						//it is not useless for our purposes!!
+						{curl_easy_setopt(handle, CURLOPT_POSTFIELDS, pcrePayload.c_str());
+						break;
+				}
+				case 9://cookie
+				case 10://raw_cookie
+						{//this way it only copies the value from the rule, meaning it might NOT result in a name=value pair.
+						 //this is still legal and accepted by servers.
+						curl_easy_setopt(handle, CURLOPT_COOKIE, pcrePayload.c_str());
+						break;
+				}
+				default:{
+						fprintf(stderr,"PCRE content modifier unsupported! Aborting");
 						exit(0);
 				}
 			}//switch
