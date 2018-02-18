@@ -68,6 +68,7 @@ class snortRule {
 
 std::size_t bodyStartPosition;
 bool printResponse=false;
+bool continueOnError=false;
 
 /**
 * writes error message to stderr
@@ -84,7 +85,9 @@ void plausabilityCheck(snortRule* rule, int *linenumber){
 	//plausability checks:
 	if(rule->body.content.size()==0){
 		fprintf(stderr,"SnortRuleParser: There was an error in rule parsing: After parsing, rule with sid %s does not contain any content or pcre to check for. This should not have happened. Aborting!\n",rule->body.sid.c_str());
-		exit(1);
+		if(continueOnError==false){
+			exit(1);
+		}
 	}
 	    if(rule->body.content.size()!=rule->body.contentOriginal.size()
 	    ||rule->body.content.size()!=rule->body.negatedContent.size()
@@ -96,7 +99,9 @@ void plausabilityCheck(snortRule* rule, int *linenumber){
 		||rule->body.pcreNocase.size()!=rule->body.pcre.size()){
 	        fprintf(stderr,"\n\nThere was an Error in rule parsing at line %d, parsed content vectors do not match in size. This should not have happened. Aborting!\n",*linenumber);
 	        fprintf(stderr,"content: %lu, contentOriginal: %lu, pcre: %lu, negatedPcre: %lu, pcreNocase: %lu, negatedContent: %lu, containsHex: %lu, ContentModifierHttp: %lu\n",rule->body.content.size(),rule->body.contentOriginal.size(),rule->body.pcre.size(),rule->body.negatedPcre.size(),rule->body.pcreNocase.size(),rule->body.negatedContent.size(),rule->body.containsHex.size(),rule->body.contentModifierHTTP.size());
-	        exit(1);
+	        if(continueOnError==false){
+	        	exit(1);
+	        }
 	    }
 }
 
@@ -573,7 +578,9 @@ void parsePcre(std::string* line, int* linecounter, snortRule* tempRule){
         //if no modifiers left, no http modifier, so useless:
         if(pcreModifierString.size()==0){
         	fprintf(stderr,"Error with rule sid:%s on line %d, failed to parse pcre modifier: No http modifier for pcre, we need at least one\n",tempRule->body.sid.c_str(),*linecounter);
-        	exit(1);
+        	if(continueOnError==false){
+        		exit(1);
+        	}
         }
 
         if(pcreModifierString.find("s")!=std::string::npos||pcreModifierString.find("m")!=std::string::npos||pcreModifierString.find("x")!=std::string::npos
@@ -581,7 +588,9 @@ void parsePcre(std::string* line, int* linecounter, snortRule* tempRule){
 				||pcreModifierString.find("G")!=std::string::npos||pcreModifierString.find("R")!=std::string::npos
 				||pcreModifierString.find("B")!=std::string::npos||pcreModifierString.find("O")!=std::string::npos){
         	 fprintf(stderr,"Error with rule sid:%s on line %d, failed to parse pcre modifier: The Snort specific (non HTTP) pcre modifiers s,m,x,A,E,G,R,B,O are not supported.\n",tempRule->body.sid.c_str(),*linecounter);
-        	 exit(1);
+        	 if(continueOnError==false){
+				exit(1);
+			}
         }
         for(std::string::size_type k = 0; k < pcreModifierString.size(); ++k) {
             switch(pcreModifierString[k]){
@@ -617,7 +626,9 @@ void parsePcre(std::string* line, int* linecounter, snortRule* tempRule){
             	break;
             default:
             	fprintf(stderr,"Error with rule sid:%s on line %d, failed to parse pcre modifier: There was an uncaught, unsupported snort specific modifier. This should not have happened!\n",tempRule->body.sid.c_str(),*linecounter);
-            	exit(1);
+            	if(continueOnError==false){
+					exit(1);
+				}
             }
         }
 
@@ -749,30 +760,40 @@ void sendRulePacket(snortRule* rule, CURL *handle, std::string host,bool verbose
     	}else{
 			//we dont have to care about nocasePcre because chars will be generated exactly how given in pcre...
 			//look for illegal chars. the perl script can not handle them (yes, a perl lib can not handle certain pcre chars!!)
-			if(rule->body.pcre.at(k).find("^")!=std::string::npos||rule->body.pcre.at(k).find("$")!=std::string::npos||rule->body.pcre.at(k).find("=")!=std::string::npos
-					||rule->body.pcre.at(k).find("(")!=std::string::npos||rule->body.pcre.at(k).find(")")!=std::string::npos||rule->body.pcre.at(k).find("?")!=std::string::npos
-					||rule->body.pcre.at(k).find("|")!=std::string::npos||rule->body.pcre.at(k).find("\\")!=std::string::npos||rule->body.pcre.at(k).find("@")!=std::string::npos){
-				fprintf(stderr,"Following literals are not supported for generating pcre payload: ^,$,=,(,),?,|,\\,@. Skipping pcre payload, rest of rule with sid:%s will be send but it might not be what you want.\n",rule->body.sid.c_str());
-				}else{
-					//hardcoded script name. Of course, this script must exist!!!
-				std::string command="./regexStringGenerator.perl ";
-				std::string commandArgument=rule->body.pcre.at(k);
-
+			//if(rule->body.pcre.at(k).find("^")!=std::string::npos||rule->body.pcre.at(k).find("$")!=std::string::npos||rule->body.pcre.at(k).find("=")!=std::string::npos
+				//	||rule->body.pcre.at(k).find("(")!=std::string::npos||rule->body.pcre.at(k).find(")")!=std::string::npos||rule->body.pcre.at(k).find("?")!=std::string::npos
+				//	||rule->body.pcre.at(k).find("|")!=std::string::npos||rule->body.pcre.at(k).find("\\")!=std::string::npos||rule->body.pcre.at(k).find("@")!=std::string::npos){
+				//fprintf(stderr,"Following literals are not supported for generating pcre payload: ^,$,=,(,),?,|,\\,@. Skipping pcre payload, rest of rule with sid:%s will be send but it might not be what you want.\n",rule->body.sid.c_str());
+				//}else{
+			   //hardcoded command name. Of course, this command must exist!!!
+				std::string command="exrex -r ";
+				std::string commandArgument="\""+rule->body.pcre.at(k)+"\"";
+				//remove whitespaces from regex:
+				if(commandArgument.find(' ')!=std::string::npos){
+					commandArgument.erase(std::remove(commandArgument.begin(), commandArgument.end(), ' '), commandArgument.end());
+					fprintf(stderr,"WARNING: removed non-encoded whitespace from rule regex with sid:%s\n",rule->body.sid.c_str());
+				}
+				//printf("####RuleRegex: %s\n",commandArgument.c_str());
 				std::string popenCommand=command+commandArgument;
-				//this opens a shell and executes above command (script), if script is not found a line is written and program continues
+				//this opens a shell and executes above command (or script), if script is not found a line is written and program continues
 				commandFile = popen( popenCommand.c_str(), "r" );
-					if ( commandFile == NULL ) {
-						fprintf( stderr, "Could not execute command to generate regex payload.\n" );
-						return;
-					}
-
-					while( fgets( buf, BUFSIZE,  commandFile )) {
-						//fprintf( stdout, "%s", buf  );
-					}
-					std::string pcrePayload=buf;
-					//strange newlines are introduced, remove them
-					pcrePayload.erase(std::remove(pcrePayload.begin(), pcrePayload.end(), '\n'), pcrePayload.end());
-					pclose( commandFile );
+				if ( commandFile == NULL ) {
+					fprintf( stderr, "Could not execute command to generate regex payload.\n" );
+					return;
+				}
+				//write result to buf
+				while( fgets( buf, BUFSIZE,  commandFile )) {
+					//fprintf( stdout, "%s", buf  );
+				}
+				std::string pcrePayload=buf;
+				//strange newlines are introduced, remove them
+				pcrePayload.erase(std::remove(pcrePayload.begin(), pcrePayload.end(), '\n'), pcrePayload.end());
+				//libcurl does not like # sign, remove it:
+				pcrePayload.erase(std::remove(pcrePayload.begin(), pcrePayload.end(), '#'), pcrePayload.end());
+				//remove remaining whitespaces, because ws should not occur in http uri, remove:
+				pcrePayload.erase(std::remove_if(pcrePayload.begin(), pcrePayload.end(), isspace), pcrePayload.end());
+				pclose( commandFile );
+				//printf("####String: %s\n",pcrePayload.c_str());
 
 				switch(rule->body.contentModifierHTTP.at(rule->body.content.size()+k)){
 					case 1:{//http_method
@@ -816,7 +837,7 @@ void sendRulePacket(snortRule* rule, CURL *handle, std::string host,bool verbose
 							exit(0);
 					}
 				}//switch
-			}
+			//}
     	}
     }
     //make sure there are no double / in hostUri and prepend the host to the uri (curl divides both when doing http)
@@ -859,11 +880,13 @@ void usage(std::string progName){
 	std::cerr << "Usage: " << progName << " -f <filename> [option]\n"
 			<< "where filename is a file containing snort rules\n"
 			<< "Options:\n"
-			<< "\t-f,--file\t\tfile with snort rules\n"
+			<< "\t-f,--fileile\t\tPath to file with rules\n"
 			<< "\t-h,--help\t\tShow this help message\n"
 			<< "\t-r,--response\t\tPrint response from server (requires -s)\n"
 			<< "\t-s,--server\t\tSpecify the hostname or ip where crafted packets should be sent to, if not set no packets will be sent\n"
-			<< "\t-p,--print\t\tPrint rules parsed from file"
+			<< "\t-p,--print\t\tPrint rules parsed from file\n"
+			<< "\t-v,--verbose\t\tBe verbose when sending packets\n"
+			<< "\t-c,--continue\t\tContinue on (some) errors, use with caution!\n"
 			<< std::endl;
 }
 
@@ -909,11 +932,12 @@ int main (int argc, char* argv[]) {
     	        {"help",     no_argument,        0, 'h'},
 				{"response", no_argument,    	 0, 'r'},
 				{"verbose",  no_argument,    	 0, 'v'},
+				{"continue", no_argument,		 0, 'c'},
     	        {"server",   required_argument,  0, 's'},
     			{"file",     required_argument,  0, 'f'},
     	        {0,			 0,					 0,  0},
     	};
-        iarg = getopt_long_only(argc, argv, "s:f:prhv", longOptions, &index);
+        iarg = getopt_long_only(argc, argv, "s:f:prhvc", longOptions, &index);
         if (iarg == -1){
             break;}
         switch (iarg){
@@ -923,6 +947,10 @@ int main (int argc, char* argv[]) {
         	case 'p':
         		printRules=true;
         		std::cout << "Configured to print parsed rules\n";
+    			break;
+        	case 'c':
+        		continueOnError=true;
+        		std::cout << "Configured to continue on error (Use with caution)\n";
     			break;
         	case 'v':
         		verbose=true;
@@ -983,9 +1011,10 @@ int main (int argc, char* argv[]) {
                 }else if((contentPosition==std::string::npos)&&(pcrePosition==std::string::npos)){
                 	fprintf(stdout,"WARNING: Rule in line number %d, does not contain content or pcre keyword. Ignored\n",linecounter);
             	}else if(line.find("flowbits:")!=std::string::npos||line.find("distance:")!=std::string::npos||line.find("within:")!=std::string::npos||line.find("offset:")!=std::string::npos||line.find("depth:")!=std::string::npos){
-            		fprintf(stdout,"WARNING:: Rule in line number %d, contains keyword for byte ranges (flowbits,distance,within,depth,offset) which is not supported (yet). Ignored\n",linecounter);
-            	}else if(line.find("dce_")!=std::string::npos||line.find("threshold:")!=std::string::npos||line.find("urilen:")!=std::string::npos){
-            		fprintf(stdout,"WARNING:: Rule in line number %d, contains one of the following not supported keywords: dce_*, threshold:, urilen. Ignored\n",linecounter);
+            		fprintf(stdout,"WARNING:: Rule in line number %d, contains keyword for byte ranges (flowbits,distance,within,depth,offset) which is not supported. Ignored\n",linecounter);
+            	}else if(line.find("dce_")!=std::string::npos||line.find("threshold:")!=std::string::npos||line.find("urilen:")!=std::string::npos||
+            			line.find("detectionfilter")!=std::string::npos){
+            		fprintf(stdout,"WARNING:: Rule in line number %d, contains one of the following not supported keywords: dce_*, threshold:, urilen:, detectionfilter. Ignored\n",linecounter);
 				}else{
 					//parse sid first, so we can print this info in error msgs
 					parseSid(&line, &linecounter,&tempRule);
@@ -1015,8 +1044,10 @@ int main (int argc, char* argv[]) {
 						}
 					}
 
-					//before pushing rule, check if it makes sense. this will exit() if it fails.
-					plausabilityCheck(&tempRule,&linecounter);
+					if(continueOnError==false){
+						//before pushing rule, check if it makes sense. this will exit() if it fails.
+						plausabilityCheck(&tempRule,&linecounter);
+					}
 					if (pushRule) {
 						parsedRules.push_back(tempRule);
 					}
