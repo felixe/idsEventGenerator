@@ -370,11 +370,17 @@ void parseContent(std::string* line, int* linecounter, snortRule* tempRule){
             for (uint16_t i=0;i<(hexContent.length());i=i+2){
                 char * pEnd;
                 byte = hexContent.substr(i,2);
-                tempChar=(char) (int)strtol(byte.c_str(), &pEnd, 16);
-                if(isprint(tempChar)){
-                    asciiString.push_back(tempChar);
-                }else{//warn if not printable
-                	fprintf(stderr,"WARNING: non-printable hex chars and hex > 7F are not supported and thus omitted: rule sid: %s in line:%d\n",tempRule->body.sid.c_str(), *linecounter);
+                if(byte=="0d"||byte=="0D"){
+                	asciiString=asciiString+"\\r";
+                }else if(byte=="0a"||byte=="0A"){
+                	asciiString=asciiString+"\\n";
+                }else{
+					tempChar=(char) (int)strtol(byte.c_str(), &pEnd, 16);
+					if(isprint(tempChar)){
+						asciiString.push_back(tempChar);
+					}else{//warn if not printable
+						fprintf(stderr,"WARNING: non-printable hex chars (except 0d and 0a) and hex > 7F are not supported and thus omitted. Hex: %s, rule sid: %s, line:%d\n",byte.c_str(), tempRule->body.sid.c_str(), *linecounter);
+					}
                 }
             }
             //adding converted string to content
@@ -688,8 +694,10 @@ std::string stringReplace(std::string const &in, std::string const &from, std::s
   return std::regex_replace( in, std::regex(from), to );
 }
 /**
- * if colon OR colon+whitespace at end of header are found a value is added.
- * WHY?: if a header without a value is set, curl assumes you want to remove the original header, so we have to set a value after colon or colon and space:
+ * 2 steps:
+ * 1:remove excess \r\n. libcurl adds a \r\n anyway, so we have to remove them.
+ * 2:if colon OR colon+whitespace at end of header are found a value is added.
+ * 	WHY?: if a header without a value is set, curl assumes you want to remove the original header, so we have to set a value after colon or colon and space:
  */
 std::string sanitizeHeader(std::string header, std::string ruleSid){
 	if(header.size()==0){
@@ -698,6 +706,16 @@ std::string sanitizeHeader(std::string header, std::string ruleSid){
 			exit(0);
 		}
 	}else{
+		//remove \r\n at end, libcurl will add them anyway
+		if(header.at(header.size()-1)=='n'&&header.at(header.size()-2)=='\\'){
+			header.pop_back();
+			header.pop_back();
+		}
+		if(header.at(header.size()-1)=='r'&&header.at(header.size()-2)=='\\'){
+			header.pop_back();
+			header.pop_back();
+		}
+		//add dummystuff if missing
 		if(header.at(header.size()-1)==':'){
 			header=header+" dummyWalue";
 		}else if(header.at(header.size()-1)==' '&&header.at(header.size()-2)==':'){
@@ -705,6 +723,13 @@ std::string sanitizeHeader(std::string header, std::string ruleSid){
 			//and yes, its a W, this is to lower the odds of triggering a false positive. I know, it IS hard to be that smart at this time of the day...
 		}else if(header.find(':')==std::string::npos){
 			header="dummyheader: "+header;
+		}
+		//snort rules also search for \r\n at beginning of header, we dont want to add that:
+		if(header.at(0)=='\\'&&header.at(1)=='r'){
+			header.erase(0,2);
+		}
+		if(header.at(0)=='\\'&&header.at(1)=='n'){
+					header.erase(0,2);
 		}
 	}
 	return header;
@@ -822,7 +847,7 @@ void sendRulePacket(snortRule* rule, std::string host,bool verbose){
 				commandArgument="\""+commandArgument+"\"";
 				//is it ok if whitespaces occur in uri pcres? -->yes it seems so...
 				if((commandArgument.find(' ')!=std::string::npos)&&(rule->body.contentModifierHTTP.at(rule->body.content.size()+k)!=2)){
-					fprintf(stderr,"WARNING: non-encoded whitespace in non-uri pcre in rule with sid:%s\n. Could lead to problems with pcre generation engine.",rule->body.sid.c_str());
+					fprintf(stderr,"WARNING: non-encoded whitespace in non-uri pcre in rule with sid:%s. Could lead to problems with pcre generation engine.\n",rule->body.sid.c_str());
 				}
 				std::string popenCommand=command+commandArgument;
 				//printf("####popenCommand: %s\n",popenCommand.c_str());
@@ -837,6 +862,9 @@ void sendRulePacket(snortRule* rule, std::string host,bool verbose){
 					//fprintf( stdout, "%s", buf  );
 				}
 				std::string pcrePayload=buf;
+				if(pcrePayload==""){
+					fprintf(stderr,"WARNING: pcre engine produced empty pcre for pcre:%s, rule sid:%s\n",commandArgument.c_str(),rule->body.sid.c_str());
+				}
 				//strange newlines are introduced, remove them
 				pcrePayload.erase(std::remove(pcrePayload.begin(), pcrePayload.end(), '\n'), pcrePayload.end());
 				pcrePayload.erase(std::remove(pcrePayload.begin(), pcrePayload.end(), '\r'), pcrePayload.end());
