@@ -35,6 +35,7 @@
 #include <curl/curl.h>
 #include <getopt.h>
 #include <regex>
+#include <algorithm>
 
 #define VECTORRESERVE 10
 
@@ -816,10 +817,9 @@ void sendRulePacket(snortRule* rule, std::string host,bool verbose){
 				}
 				//quote it, if not shell will expand this to nasty stuff
 				commandArgument="\""+commandArgument+"\"";
-				//remove whitespaces from regex:
-				if(commandArgument.find(' ')!=std::string::npos){
-					commandArgument.erase(std::remove(commandArgument.begin(), commandArgument.end(), ' '), commandArgument.end());
-					fprintf(stderr,"WARNING: removed non-encoded whitespace from rule regex with sid:%s\n",rule->body.sid.c_str());
+				//is it ok if whitespaces occur in uri pcres? -->yes it seems so...
+				if((commandArgument.find(' ')!=std::string::npos)&&(rule->body.contentModifierHTTP.at(rule->body.content.size()+k)!=2)){
+					fprintf(stderr,"WARNING: non-encoded whitespace in non-uri pcre in rule with sid:%s\n. Could lead to problems with pcre generation engine.",rule->body.sid.c_str());
 				}
 				std::string popenCommand=command+commandArgument;
 				//printf("####popenCommand: %s\n",popenCommand.c_str());
@@ -839,9 +839,6 @@ void sendRulePacket(snortRule* rule, std::string host,bool verbose){
 				pcrePayload.erase(std::remove(pcrePayload.begin(), pcrePayload.end(), '\r'), pcrePayload.end());
 				//libcurl does not like # sign, remove it:
 				pcrePayload.erase(std::remove(pcrePayload.begin(), pcrePayload.end(), '#'), pcrePayload.end());
-				//TODO: is the following a good idea or should ws be replaced with %20 or similar
-				//remove remaining whitespaces, because ws should not occur in http uri, remove:
-				pcrePayload.erase(std::remove_if(pcrePayload.begin(), pcrePayload.end(), isspace), pcrePayload.end());
 				pclose( commandFile );
 
 				switch(rule->body.contentModifierHTTP.at(rule->body.content.size()+k)){
@@ -858,7 +855,14 @@ void sendRulePacket(snortRule* rule, std::string host,bool verbose){
 					}
 					case 2://http_uri
 					case 3://http_raw_uri
-							{hostUri=hostUri+pcrePayload;
+							{	for(uint32_t i=0;i<pcrePayload.length();i++){
+									//check for whitespace, if at least one found, replace them all with +, which is http conform and  while ' ' in uri is not...
+									if(pcrePayload.at(i)==' '){
+										std::replace( pcrePayload.begin(), pcrePayload.end(), ' ', '+');
+									}
+								}
+								//pcrePayload.erase(std::remove_if(pcrePayload.begin(), pcrePayload.end(), isspace), pcrePayload.end());
+								hostUri=hostUri+pcrePayload;
 							break;
 					}
 					case 6://header
@@ -879,6 +883,7 @@ void sendRulePacket(snortRule* rule, std::string host,bool verbose){
 					case 8://client_body. This possibly adds a body also to GET requests, which is not illegal but useless because server is not allowed to interpret it.
 							//it is not useless for our purposes!!
 							{curl_easy_setopt(handle, CURLOPT_POSTFIELDS, pcrePayload.c_str());
+							//printf("######added::::%s:::: to body\n",pcrePayload.c_str());
 							break;
 					}
 					case 9://cookie
