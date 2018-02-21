@@ -373,7 +373,9 @@ void parseContent(std::string* line, int* linecounter, snortRule* tempRule){
                 tempChar=(char) (int)strtol(byte.c_str(), &pEnd, 16);
                 if(isprint(tempChar)){
                     asciiString.push_back(tempChar);
-                }//if not printable ignore char
+                }else{//warn if not printable
+                	fprintf(stderr,"WARNING: non-printable hex chars and hex > 7F are not supported and thus omitted: rule sid: %s in line:%d\n",tempRule->body.sid.c_str(), *linecounter);
+                }
             }
             //adding converted string to content
             contentHexFree=contentHexFree+asciiString;
@@ -720,6 +722,7 @@ void sendRulePacket(snortRule* rule, std::string host,bool verbose){
     CURLcode result;
     std::size_t doppler;
     std::string hostUri="";
+    std::string clientBody="";
     FILE *commandFile;
 	const int BUFSIZE = 1000;
 	char buf[ BUFSIZE ];
@@ -758,7 +761,7 @@ void sendRulePacket(snortRule* rule, std::string host,bool verbose){
 						}
 						case 2://http_uri
 						case 3://http_raw_uri
-								{hostUri=hostUri+rule->body.content[j].c_str();
+								{hostUri=hostUri+rule->body.content[j];
 								break;
 						}
 						case 6://header
@@ -775,7 +778,7 @@ void sendRulePacket(snortRule* rule, std::string host,bool verbose){
 								break;
 						}
 						case 8: //client_body. This possibly adds a body also to GET requests, which is not illegal but useless because server is not allowed to interpret it.
-								{curl_easy_setopt(handle, CURLOPT_POSTFIELDS, rule->body.content[j].c_str());
+								{clientBody=clientBody+rule->body.content[j];
 								break;
 						}
 						case 9://cookie
@@ -806,7 +809,7 @@ void sendRulePacket(snortRule* rule, std::string host,bool verbose){
 				//	||rule->body.pcre.at(k).find("|")!=std::string::npos||rule->body.pcre.at(k).find("\\")!=std::string::npos||rule->body.pcre.at(k).find("@")!=std::string::npos){
 				//fprintf(stderr,"Following literals are not supported for generating pcre payload: ^,$,=,(,),?,|,\\,@. Skipping pcre payload, rest of rule with sid:%s will be send but it might not be what you want.\n",rule->body.sid.c_str());
 				//}else{
-			   //hardcoded command name. Of course, this command must exist!!!
+			    //hardcoded command name. Of course, this command must exist!!!
 				std::string command="exrex -r ";
 				std::string commandArgument=rule->body.pcre.at(k);
 				//remove newline chars in pcre, fgets only reads one line and in most of our cases they are useless anyway
@@ -882,8 +885,7 @@ void sendRulePacket(snortRule* rule, std::string host,bool verbose){
 					}
 					case 8://client_body. This possibly adds a body also to GET requests, which is not illegal but useless because server is not allowed to interpret it.
 							//it is not useless for our purposes!!
-							{curl_easy_setopt(handle, CURLOPT_POSTFIELDS, pcrePayload.c_str());
-							//printf("######added::::%s:::: to body\n",pcrePayload.c_str());
+							{clientBody=clientBody+pcrePayload;
 							break;
 					}
 					case 9://cookie
@@ -916,9 +918,12 @@ void sendRulePacket(snortRule* rule, std::string host,bool verbose){
 	header=curl_slist_append(header, content.c_str());
 	//set custom set of headers from list above
 	curl_easy_setopt(handle, CURLOPT_HTTPHEADER, header);
-
     //tell curl which host and uri to use
     curl_easy_setopt(handle, CURLOPT_URL, hostUri.c_str());
+    //add client body
+    if(clientBody!=""){
+    	curl_easy_setopt(handle, CURLOPT_POSTFIELDS, clientBody.c_str());
+    }
     if(verbose){
     	curl_easy_setopt(handle, CURLOPT_VERBOSE, 1L);
     }
