@@ -61,11 +61,24 @@ class ruleBody{
     std::string rev;
 };
 
+class ruleHeader {
+    public:
+    	std::string action;
+		std::string protocol;
+		std::string from;
+		std::string fromPort;
+		bool bidirectional;
+		std::string to;
+		std::string toPort;
+    };
+
 class snortRule {
     public:
-    std::string header;
+    ruleHeader header;
     ruleBody body;
 };
+
+
 
 std::size_t bodyStartPosition;
 bool printResponse=false;
@@ -116,8 +129,19 @@ void printSnortRule(snortRule* rule){
 	int dummyInt=-1;
 	plausabilityCheck(rule, &dummyInt);
 
+	fprintf(stdout,"Action:\t\t\t\t%s\n",rule->header.action.c_str());
+	    fprintf(stdout,"Protocol:\t\t\t%s\n",rule->header.protocol.c_str());
+	    fprintf(stdout,"From:\t\t\t\t\"%s\"\n",rule->header.from.c_str());
+	    fprintf(stdout,"FromPort:\t\t\t\"%s\"\n",rule->header.fromPort.c_str());
+	    fprintf(stdout,"To:\t\t\t\t\"%s\"\n",rule->header.to.c_str());
+	    fprintf(stdout,"ToPort:\t\t\t\t\"%s\"\n",rule->header.toPort.c_str());
+	    if(rule->header.bidirectional){
+	    	fprintf(stdout,"Direction:\t\t\t<>\n");
+	    }else{
+	    	fprintf(stdout,"Direction:\t\t\t->\n");
+	    }
+
     fprintf(stdout,"Message:\t\t\t%s\n",rule->body.msg.c_str());
-    fprintf(stdout,"Header:\t\t\t\t%s\n",rule->header.c_str());
 
     //loop through content related vectors
     for(unsigned long i=0;i<rule->body.content.size();i++){
@@ -273,12 +297,66 @@ void parseMsg(std::string* line, int* linecounter, snortRule* tempRule){
 *parses the rule header from given line and writes it to given snortRule class
 */
 void parseHeader(std::string* line, int* linecounter, snortRule* tempRule){
-    std::size_t bodyStartPosition=line->find("(");
-    if(bodyStartPosition==std::string::npos){
-        parsingError(*linecounter, "header");
-        exit(1);
-    }
-    tempRule->header=line->substr(0,bodyStartPosition);
+		std::string headerString;
+	    std::string from;
+	    std::string fromPort;
+	    std::string to;
+	    std::size_t start;
+	    std::size_t end;
+
+	    start=line->find("(");
+	    if(start==std::string::npos){
+	        parsingError(*linecounter, "header");
+	    }
+	    headerString=line->substr(0,start);
+	    end=headerString.find(" ");
+	    tempRule->header.action=headerString.substr(0,end);
+	    headerString.erase(0,end+1);
+
+	    //TODO: skip rule if it does not apply to tcp... not really necessary
+	    end=headerString.find(" ");
+	    tempRule->header.protocol=headerString.substr(0,end);
+	    headerString.erase(0,end+1);
+
+	    end=headerString.find("<>");
+	    if(end==std::string::npos){
+	    	end=headerString.find("->");
+	    	if(end==std::string::npos){
+	    		parsingError(*linecounter,"header direction sign");
+	    	}
+	    	tempRule->header.bidirectional=false;
+	    }else{
+	    	tempRule->header.bidirectional=true;
+	    }
+
+	    //the end-1 omits the trailing space in this string
+		from=headerString.substr(0,end-1);
+		headerString.erase(0,end+3);
+		to=headerString.substr(0,headerString.size()-1);
+
+		end=from.find(" ");
+		if(end==std::string::npos){
+			parsingError(*linecounter,"no space between from address and port");
+		}
+		tempRule->header.from=from.substr(0,end);
+		from.erase(0,end+1);
+		fromPort=from.substr(0,from.size());
+		//this only catches if the default variable is used, but thats life...
+		if(fromPort.find("$HTTP_PORTS")!=std::string::npos){
+			fprintf(stderr,"Error: Rule looks for packet coming from server ports ($HTTP_PORTS variable). Can not control server responses, please remove this rule. Line: %d\n",*linecounter);
+        	if(continueOnError==false){
+        		exit(1);
+        	}
+		}
+		tempRule->header.fromPort=fromPort;
+
+		end=to.find(" ");
+		if(end==std::string::npos){
+			parsingError(*linecounter,"no space between to address and port");
+		}
+		tempRule->header.to=to.substr(0,end);
+		to.erase(0,end+1);
+		tempRule->header.toPort=to.substr(0,to.size());
 }
 
 /**
@@ -717,12 +795,12 @@ std::string sanitizeHeader(std::string header, std::string ruleSid){
 		}
 		//add dummystuff if missing
 		if(header.at(header.size()-1)==':'){
-			header=header+" dummyWalue";
+			header=header+" TummyWalue";
 		}else if(header.at(header.size()-1)==' '&&header.at(header.size()-2)==':'){
-			header=header+"dummyWalue";
-			//and yes, its a W, this is to lower the odds of triggering a false positive. I know, it IS hard to be that smart at this time of the day...
+			header=header+"TummyWalue";
+			//and yes, its a T (and a W), this is to lower the odds of triggering a false positive. I know, it IS hard to be that smart at this time of the day...
 		}else if(header.find(':')==std::string::npos){
-			header="dummyheader: "+header;
+			header="TummyHeader: "+header;
 		}
 		//snort rules also search for \r\n at beginning of header, we dont want to add that:
 		if(header.at(0)=='\\'&&header.at(1)=='r'){
@@ -767,6 +845,8 @@ void sendRulePacket(snortRule* rule, std::string host,bool verbose){
 	//set http GET as default method, will be changed in case, this is necessary when using CURLOPT_CUSTOMREQUEST
 	curl_easy_setopt(handle, CURLOPT_CUSTOMREQUEST, NULL);
 	curl_easy_setopt(handle, CURLOPT_HTTPGET, 1L);
+	//remove Accept: */* header which libcurl sets by default
+	header=curl_slist_append(header,"Accept:");
 
     for(int j=0;j<rule->body.content.size();j++){
     	if(rule->body.negatedContent.at(j)){
@@ -796,7 +876,7 @@ void sendRulePacket(snortRule* rule, std::string host,bool verbose){
 						}
 						case 4://http_stat_msg
 						case 5:
-								{fprintf(stderr,"Can not control server responses, please remove this rule (sid: %s)\n",rule->body.sid.c_str());
+								{fprintf(stderr,"Error: Can not control server responses, please remove this rule (sid: %s)\n",rule->body.sid.c_str());
 								if(continueOnError==0){
 									exit(0);
 								}
@@ -904,7 +984,7 @@ void sendRulePacket(snortRule* rule, std::string host,bool verbose){
 					}
 					case 4://http_stat_msg
 					case 5://http_stat_code
-							{fprintf(stderr,"can not control server responses, please remove this rule (sid: %s)\n",rule->body.sid.c_str());
+							{fprintf(stderr,"Error: can not control server responses, please remove this rule (sid: %s)\n",rule->body.sid.c_str());
 							if(continueOnError==0){
 								exit(0);
 							}
@@ -1102,6 +1182,8 @@ int main (int argc, char* argv[]) {
             	}else if(line.find("dce_")!=std::string::npos||line.find("threshold:")!=std::string::npos||line.find("urilen:")!=std::string::npos||
             			line.find("detectionfilter")!=std::string::npos){
             		fprintf(stdout,"WARNING: Rule in line number %d, contains one of the following not supported keywords: dce_*, threshold:, urilen:, detectionfilter. Ignored\n",linecounter);
+            	}else if(line.find("from_server")!=std::string::npos||line.find("to_client")!=std::string::npos){
+        			fprintf(stdout,"WARNING: Rule looks for packet coming from server ('from_server' or 'to_client' keyword). Can not control server responses. Rule ignored in line: %d\n",linecounter);
 				}else{
 					//parse sid first, so we can print this info in error msgs
 					parseSid(&line, &linecounter,&tempRule);
