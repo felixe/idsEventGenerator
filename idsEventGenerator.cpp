@@ -766,14 +766,8 @@ size_t write_data(void *buffer, size_t size, size_t nmemb, void *userp){
 }
 
 /**
- * replaces string 'from' in string 'in' to 'to'
- */
-std::string stringReplace(std::string const &in, std::string const &from, std::string const &to){
-  return std::regex_replace( in, std::regex(from), to );
-}
-/**
  * 2 steps:
- * 1:remove excess \r\n. libcurl adds a \r\n anyway, so we have to remove them.
+ * 1:remove excess \r\n at end and beginning. libcurl adds a \r\n anyway, so we have to remove them.
  * 2:if colon OR colon+whitespace at end of header are found a value is added.
  * 	WHY?: if a header without a value is set, curl assumes you want to remove the original header, so we have to set a value after colon or colon and space:
  */
@@ -812,6 +806,20 @@ std::string sanitizeHeader(std::string header, std::string ruleSid){
 	}
 	return header;
 }
+
+/**
+ * check given uri for unsafe and unwise characters rfc-1738, rfc-2396
+ * print warning if true
+ */
+void checkUri(std::string uri, std::string sid){
+	if(uri.find("<")!=std::string::npos||uri.find(">")!=std::string::npos||uri.find("#")!=std::string::npos||uri.find("%")!=std::string::npos||uri.find("\"")!=std::string::npos){
+    	fprintf(stderr,"WARNING: The HTTP uri used for this rule contains disallowed characters. sid: %s\n",sid.c_str());
+	}
+	if(uri.find("{")!=std::string::npos||uri.find("}")!=std::string::npos||uri.find("|")!=std::string::npos||uri.find("[")!=std::string::npos||uri.find("]")!=std::string::npos||uri.find("`")!=std::string::npos||uri.find("\\")!=std::string::npos){
+	    fprintf(stderr,"WARNING: The HTTP uri used for this rule contains unwise characters. sid: %s\n",sid.c_str());
+	}
+
+}
 /**
  * sends an HTTP request to the given host containing the pattern(s) of the given rule
  */
@@ -823,7 +831,7 @@ void sendRulePacket(snortRule* rule, std::string host,bool verbose){
     //using easy interface, no need for simultaneous transfers
     handle = curl_easy_init();
     CURLcode result;
-    std::size_t doppler;
+    std::size_t index;
     std::string hostUri="";
     std::string clientBody="";
     FILE *commandFile;
@@ -923,14 +931,25 @@ void sendRulePacket(snortRule* rule, std::string host,bool verbose){
 				while ((at=commandArgument.find(crlf))!= std::string::npos){
 					commandArgument.erase(at, crlf.length());
 				}
+				//replace \s with " ", so whitespace chars become just whitespace and not something like newlines
+				while(true){
+					index=commandArgument.find("\\s");
+					if(index==std::string::npos){
+						break;
+					}else{
+						commandArgument.replace(index,2," ");
+						index+=3;
+					}
+				}
 				//quote it, if not shell will expand this to nasty stuff
 				commandArgument="\""+commandArgument+"\"";
 				//is it ok if whitespaces occur in uri pcres? -->yes it seems so...
 				if((commandArgument.find(' ')!=std::string::npos)&&(rule->body.contentModifierHTTP.at(rule->body.content.size()+k)!=2)){
 					fprintf(stderr,"WARNING: non-encoded whitespace in non-uri pcre in rule with sid:%s. Could lead to problems with pcre generation engine.\n",rule->body.sid.c_str());
 				}
+
 				std::string popenCommand=command+commandArgument;
-				//printf("####popenCommand: %s\n",popenCommand.c_str());
+				printf("####popenCommand: %s\n",popenCommand.c_str());
 				//this opens a shell and executes above command (or script), if script is not found a line is written and program continues
 				commandFile = popen( popenCommand.c_str(), "r" );
 				if ( commandFile == NULL ) {
@@ -1017,8 +1036,9 @@ void sendRulePacket(snortRule* rule, std::string host,bool verbose){
     }
     hostUri.insert(0,host+"/");
 
-    //escape unsupported chars in uri string --> not necessary
-    //hostUri=stringReplace(hostUri,"@","\\@");
+    //check uri for unsafe and unwise characters rfc-1738, rfc-2396
+    // * Hmm, this should probably be done during parsing, and not before sending...
+    checkUri(hostUri,rule->body.sid.c_str());
 
 	std::string content="Rulesid: ";
 	content=content+rule->body.sid.c_str();
@@ -1175,6 +1195,7 @@ int main (int argc, char* argv[]) {
                 //sort out rules that we are not interested in
                 if(alertPosition==std::string::npos){
                     fprintf(stdout,"WARNING: Rule in line number %d, does not contain alert keyword. Ignored\n",linecounter);
+                //the following check inherently also checks for uricontent: keyword
                 }else if((contentPosition==std::string::npos)&&(pcrePosition==std::string::npos)){
                 	fprintf(stdout,"WARNING: Rule in line number %d, does not contain content or pcre keyword. Ignored\n",linecounter);
             	}else if(line.find("flowbits:")!=std::string::npos||line.find("distance:")!=std::string::npos||line.find("within:")!=std::string::npos||line.find("offset:")!=std::string::npos||line.find("depth:")!=std::string::npos){
