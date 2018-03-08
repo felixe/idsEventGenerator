@@ -890,7 +890,9 @@ void sendRulePacket(snortRule* rule, std::string host,bool verbose){
     CURLcode result;
 
     std::string hostUri="";
-    std::string clientBody="";
+    //we generally add 6 chars to the client body because
+    //Snort does not do any pattern matching if there are less than 6 chars
+    std::string clientBody="12345";
     FILE *commandFile;
 	const int BUFSIZE = 1000;
 	char buf[ BUFSIZE ];
@@ -1139,8 +1141,8 @@ void sendRulePacket(snortRule* rule, std::string host,bool verbose){
 	curl_easy_setopt(handle, CURLOPT_HTTPHEADER, header);
     //tell curl which host and uri to use
     curl_easy_setopt(handle, CURLOPT_URL, hostUri.c_str());
-    //add client body
-    if(clientBody!=""){
+    //add client body, if set
+    if(clientBody!="12345"){
     	curl_easy_setopt(handle, CURLOPT_POSTFIELDS, clientBody.c_str());
     }
     if(verbose){
