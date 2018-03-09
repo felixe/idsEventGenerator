@@ -890,6 +890,7 @@ void sendRulePacket(snortRule* rule, std::string host,bool verbose){
     CURLcode result;
 
     std::string hostUri="";
+    std::string cookies="";
     //we generally add 6 chars to the client body because
     //Snort does not do any pattern matching if there are less than 6 chars
     std::string clientBody="12345";
@@ -964,7 +965,7 @@ void sendRulePacket(snortRule* rule, std::string host,bool verbose){
 						case 10://raw_cookie
 								{//this way it only copies the value from the rule, meaning it might not always result in a name=value pair.
 								 //this is still legal and accepted by servers.
-									curl_easy_setopt(handle, CURLOPT_COOKIE, rule->body.content[j].c_str());
+									cookies=cookies+rule->body.content[j];
 								break;
 						}
 						default:{
@@ -1109,7 +1110,7 @@ void sendRulePacket(snortRule* rule, std::string host,bool verbose){
 					case 10://raw_cookie
 							{//this way it only copies the value from the rule, meaning it might not always result in a name=value pair.
 							 //this is still legal and accepted by servers.
-							curl_easy_setopt(handle, CURLOPT_COOKIE, pcrePayload.c_str());
+								cookies=cookies+pcrePayload;
 							break;
 					}
 					default:{
@@ -1131,8 +1132,8 @@ void sendRulePacket(snortRule* rule, std::string host,bool verbose){
     }
     //prepend host to uri as libcurl does not
     hostUri.insert(0,host);
-
-
+    //set cookies
+	curl_easy_setopt(handle, CURLOPT_COOKIE, cookies.c_str());
 	std::string content="Rulesid: ";
 	content=content+rule->body.sid.c_str();
 	//add custom headers from above NOTE: do not append crlf at the end, is done automatically
@@ -1297,7 +1298,10 @@ int main (int argc, char* argv[]) {
             		fprintf(stdout,"WARNING: Rule in line number %d, contains one of the following not supported keywords: dce_*, threshold:, urilen:, detectionfilter. Ignored\n",linecounter);
             	}else if(line.find("from_server")!=std::string::npos||line.find("to_client")!=std::string::npos){
         			fprintf(stdout,"WARNING: Rule looks for packet coming from server ('from_server' or 'to_client' keyword). Can not control server responses. Rule ignored in line: %d\n",linecounter);
-				}else{
+            	}else if(line.find("content: ")!=std::string::npos){
+        			fprintf(stdout,"WARNING: Content pattern does not start immediately after content keyword. I don't like that. Fix it. Rule ignored in line: %d\n",linecounter);
+
+            	}else{
 					//parse sid first, so we can print this info in error msgs
 					parseSid(&line, &linecounter,&tempRule);
                     parseHeader(&line,&linecounter,&tempRule);
