@@ -875,6 +875,19 @@ std::string sanitizePCRE(std::string pcre, std::string sid){
 			}
 		}
 	}
+
+	//replace *? with *
+		while(true){
+			index=pcre.find("*?");
+			if(index==std::string::npos){
+				break;
+			}else{
+				pcre.replace(index,2,"*");
+				if(verbose){
+					printf("INFO: replaced *? with * in pcre before generation of packet. sid:%s\n",sid.c_str());
+				}
+			}
+		}
 	return pcre;
 }
 /**
@@ -1020,9 +1033,9 @@ void sendRulePacket(snortRule* rule, std::string host,bool verbose){
 
 				//search for unsupported quantifiers and warn
 				if(commandArgument.find("?+")!=std::string::npos||commandArgument.find("??")!=std::string::npos||commandArgument.find("*+")!=std::string::npos
-						||commandArgument.find("++")!=std::string::npos||commandArgument.find("*?")!=std::string::npos
+						||commandArgument.find("++")!=std::string::npos
 				){
-					fprintf(stderr,"WARNING: The pcre in this rule contains one of the not supported quantifiers: ?+, ??, *+, ++, *?. sid:%s\n",rule->body.sid.c_str());
+					fprintf(stderr,"WARNING: The pcre in this rule contains one of the not supported quantifiers: ?+, ??, *+, ++. sid:%s\n",rule->body.sid.c_str());
 
 				}
 
@@ -1153,9 +1166,16 @@ void sendRulePacket(snortRule* rule, std::string host,bool verbose){
     curl_easy_setopt(handle, CURLOPT_TIMEOUT, 3);
     //do it!
 	result=curl_easy_perform(handle);
-	curl_easy_getinfo (handle, CURLINFO_RESPONSE_CODE, &httpResponseCode);
 	if(result != CURLE_OK){
 			fprintf(stderr, "curl_easy_perform() failed for packet from rule sid %s, with url %s, with error: %s.\n",rule->body.sid.c_str(),hostUri.c_str(), curl_easy_strerror(result));
+	}
+	//curl_easy_getinfo (handle, CURLINFO_RESPONSE_CODE, &httpResponseCode);
+	long usedPort;
+	result = curl_easy_getinfo(handle, CURLINFO_LOCAL_PORT, &usedPort);
+	if(result==CURLE_OK) {
+		printf("Local port used for this request: %ld\n", usedPort);
+	}else{
+		printf("Failure in getting local port\n");
 	}
 	curl_easy_cleanup(handle);
 }
