@@ -84,6 +84,7 @@ std::size_t bodyStartPosition;
 bool printResponse=false;
 bool continueOnError=false;
 bool verbose=false;
+int packetCounter=1;
 
 /**
 * writes error message to stderr
@@ -915,6 +916,11 @@ void sendRulePacket(snortRule* rule, std::string host,bool verbose){
 	long httpResponseCode=0;
 
 
+    if(verbose){
+    	fprintf(stdout,"\n--------------------------------------------------------\n");
+    	fprintf(stdout,"INFO: Starting to generate packet # %d, for ruleSid %s\n", packetCounter, rule->body.sid.c_str());
+    	fprintf(stdout,"--------------------------------------------------------\n");
+    }
 	//reset everything, necessary because curl remembers last cookie and sends it again
 	//curl_easy_reset(handle);
 	//with the following curl reports an error for every fail message of the server e.g. 404, 403 but not 100...
@@ -1178,6 +1184,7 @@ void sendRulePacket(snortRule* rule, std::string host,bool verbose){
 		printf("Failure in getting local port\n");
 	}
 	curl_easy_cleanup(handle);
+	packetCounter++;
 }
 
 /**
