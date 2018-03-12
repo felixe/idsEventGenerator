@@ -41,24 +41,24 @@
 
 class ruleBody{
     public:
-    std::string msg;
-    std::vector<bool> negatedContent;
-    std::vector<std::string> contentOriginal;
-    std::vector<bool> containsHex;
-    std::vector<bool> contentNocase;
-    std::vector<std::string> content;
-    std::vector<int> contentModifierHTTP;
-    //content modifier are encoded for faster processing:
-    //1:http_method
-    //2:http_uri
-    //3:http_raw_uri
-    //4:http_stat_msg
-    //5:http_stat_code
-    std::vector<std::string> pcre;
-    std::vector<bool> negatedPcre;
-    std::vector<bool> pcreNocase;
-    std::string sid;
-    std::string rev;
+		std::string msg;
+		std::vector<bool> negatedContent;
+		std::vector<std::string> contentOriginal;
+		std::vector<bool> containsHex;
+		std::vector<bool> contentNocase;
+		std::vector<std::string> content;
+		std::vector<int> contentModifierHTTP;
+		//content modifier are encoded for faster processing:
+		//1:http_method
+		//2:http_uri
+		//3:http_raw_uri
+		//4:http_stat_msg
+		//5:http_stat_code
+		std::vector<std::string> pcre;
+		std::vector<bool> negatedPcre;
+		std::vector<bool> pcreNocase;
+		std::string sid;
+		std::string rev;
 };
 
 class ruleHeader {
@@ -607,7 +607,21 @@ void parseContentModifier(std::string* line, int* linecounter, snortRule* tempRu
         }
     }//while
 }
-
+/**
+ * check given uri for disallowed and unwise characters see rfc-2396
+ * print warning if true
+ */
+void checkUri(std::string uri, std::string sid){
+	//delimiters
+	if(uri.find("#")!=std::string::npos||uri.find(">")!=std::string::npos||uri.find("<")!=std::string::npos||uri.find("%")!=std::string::npos||uri.find("\"")!=std::string::npos){
+		//TODO: check if they are escaped
+    	fprintf(stderr,"WARNING: The HTTP uri used for this rule may contain disallowed characters. sid: %s\n",sid.c_str());
+	}
+	//unwise
+	if(uri.find("{")!=std::string::npos||uri.find("}")!=std::string::npos||uri.find("|")!=std::string::npos||uri.find("[")!=std::string::npos||uri.find("]")!=std::string::npos||uri.find("`")!=std::string::npos||uri.find("\\")!=std::string::npos){
+	    fprintf(stderr,"WARNING: The HTTP uri used for this rule may contain unwise characters. sid: %s\n",sid.c_str());
+	}
+}
 /**
 * parses pcre patterns in given line and writes it to given tempRule class in the corresponding vectors
 */
@@ -699,9 +713,11 @@ void parsePcre(std::string* line, int* linecounter, snortRule* tempRule){
             	tempRule->body.contentModifierHTTP.push_back(10);
             	break;
             case 'U'://uri
+            	//TODO: it would make sense to check already here for unescaped unsupported or unwise chars, on the other hand snort does accept most of them anyway
             	tempRule->body.contentModifierHTTP.push_back(2);
             	break;
             case 'I'://raw uri
+            	//checkUriPCRE(pcreString);
             	tempRule->body.contentModifierHTTP.push_back(3);
             	break;
             case 'M'://method
@@ -833,20 +849,7 @@ std::string sanitizeHeader(std::string header, std::string ruleSid){
 }
 
 /**
- * check given uri for unsafe and unwise characters rfc-1738, rfc-2396
- * print warning if true
- */
-void checkUri(std::string uri, std::string sid){
-	if(uri.find("<")!=std::string::npos||uri.find(">")!=std::string::npos||uri.find("#")!=std::string::npos||uri.find("%")!=std::string::npos||uri.find("\"")!=std::string::npos){
-    	fprintf(stderr,"WARNING: The HTTP uri used for this rule contains disallowed characters. sid: %s\n",sid.c_str());
-	}
-	if(uri.find("{")!=std::string::npos||uri.find("}")!=std::string::npos||uri.find("|")!=std::string::npos||uri.find("[")!=std::string::npos||uri.find("]")!=std::string::npos||uri.find("`")!=std::string::npos||uri.find("\\")!=std::string::npos){
-	    fprintf(stderr,"WARNING: The HTTP uri used for this rule contains unwise characters. sid: %s\n",sid.c_str());
-	}
-}
-
-/*
- * this function replaces character classes and similar sign that are not supported by the exrex generator by equal signs
+ * this function replaces character classes that are not supported by the exrex and problematic chars by equivalent signs
  */
 std::string sanitizePCRE(std::string pcre, std::string sid){
     std::size_t index;
@@ -872,24 +875,184 @@ std::string sanitizePCRE(std::string pcre, std::string sid){
 		}else{
 			pcre.replace(index,2,"+");
 			if(verbose){
-				printf("INFO: replaced +? with + in pcre before generation of packet. sid:%s\n",sid.c_str());
+				printf("INFO: replaced +? with + in pcre before generation. sid:%s\n",sid.c_str());
 			}
 		}
 	}
 
 	//replace *? with *
-		while(true){
-			index=pcre.find("*?");
+	while(true){
+		index=pcre.find("*?");
+		if(index==std::string::npos){
+			break;
+		}else{
+			pcre.replace(index,2,"*");
+			if(verbose){
+				printf("INFO: replaced *? with * in pcre before generation. sid:%s\n",sid.c_str());
+			}
+		}
+	}
+
+	//replace .+ with [a-z] so that it produces easy to use char and not some weird sh**
+	while(true){
+		index=pcre.find(".+");
+		if(index==std::string::npos){
+			break;
+		}else{
+			pcre.replace(index,2,"[a-z]}");
+			if(verbose){
+				printf("INFO: replaced .+ with [a-z] in pcre before generation. sid:%s\n",sid.c_str());
+			}
+		}
+	}
+
+	//replace .* with [a-z] so that it produces easy to use char and not some weird sh**
+	while(true){
+		index=pcre.find(".*");
+		if(index==std::string::npos){
+			break;
+		}else{
+			pcre.replace(index,2,"[a-z]");
+			if(verbose){
+				printf("INFO: replaced .* with [a-z] in pcre before generation. sid:%s\n",sid.c_str());
+			}
+		}
+	}
+
+	//replace .? with [a-z] so that it produces easy to use char and not some weird sh**
+	while(true){
+		index=pcre.find(".?");
+		if(index==std::string::npos){
+			break;
+		}else{
+			pcre.replace(index,2,"[a-z]");
+			if(verbose){
+				printf("INFO: replaced .? with [a-z] in pcre before generation. sid:%s\n",sid.c_str());
+			}
+		}
+	}
+
+	while(true){
+		index=pcre.find("[^&]");
+		if(index==std::string::npos){
+			break;
+		}else{
+			pcre.replace(index,4,"[a-z]");
+			if(verbose){
+				printf("INFO: replaced [^&] with [a-z] in pcre before generation. sid:%s\n",sid.c_str());
+			}
+		}
+	}
+
+	while(true){
+			index=pcre.find("[^\\]");
 			if(index==std::string::npos){
 				break;
 			}else{
-				pcre.replace(index,2,"*");
+				pcre.replace(index,4,"[a-z]");
 				if(verbose){
-					printf("INFO: replaced *? with * in pcre before generation of packet. sid:%s\n",sid.c_str());
+					printf("INFO: replaced [^\\] with [a-z] in pcre before generation. sid:%s\n",sid.c_str());
 				}
 			}
 		}
+
+	while(true){
+			index=pcre.find("[^\\n]");
+			if(index==std::string::npos){
+				break;
+			}else{
+				pcre.replace(index,5,"[a-z]");
+				if(verbose){
+					printf("INFO: replaced [^\\n] with [a-z] in pcre before generation. sid:%s\n",sid.c_str());
+				}
+			}
+		}
+
+	while(true){
+				index=pcre.find("[^\\r\\n]");
+				if(index==std::string::npos){
+					break;
+				}else{
+					pcre.replace(index,7,"[a-z]");
+					if(verbose){
+						printf("INFO: replaced [^\\r\\n] with [a-z] in pcre before generation. sid:%s\n",sid.c_str());
+					}
+				}
+			}
+//	while(true){
+//					index=pcre.find("[^\\0A\\0D]");
+//					if(index==std::string::npos){
+//						break;
+//					}else{
+//						pcre.replace(index,9,"[a-z]");
+//						if(verbose){
+//							printf("INFO: replaced [^\\0A\\0D] with [a-z] in pcre before generation. sid:%s\n",sid.c_str());
+//						}
+//					}
+//				}
+//	while(true){
+//					index=pcre.find("[^\\x26\\x3B]");
+//					if(index==std::string::npos){
+//						break;
+//					}else{
+//						pcre.replace(index,11,"[a-z]");
+//						if(verbose){
+//							printf("INFO: replaced [^\\x26\\x3B] with [a-z] in pcre before generation. sid:%s\n",sid.c_str());
+//						}
+//					}
+//				}
+	while(true){
+					index=pcre.find("[^\\x2f]");
+					if(index==std::string::npos){
+						break;
+					}else{
+						pcre.replace(index,7,"[a-z]");
+						if(verbose){
+							printf("INFO: replaced [^\\x2f] with [a-z] in pcre before generation. sid:%s\n",sid.c_str());
+						}
+					}
+				}
+//	while(true){
+//					index=pcre.find("[^\\s\\x26\\x3B\\x2f]");
+//					if(index==std::string::npos){
+//						break;
+//					}else{
+//						pcre.replace(index,17,"[a-z]");
+//						if(verbose){
+//							printf("INFO: replaced [^\\s\\x26\\x3B\\x2f] with [a-z] in pcre before generation. sid:%s\n",sid.c_str());
+//						}
+//					}
+//				}
+
 	return pcre;
+}
+/**
+ * generate string from given pcre (with external command)
+ */
+std::string generateStringFromPCRE(std::string pcreString){
+	//pcre payload generation with the help of an external perl script. This script MUST be present in the same folder as this executable file.
+	//this opens a shell and executes above command (or script), if script is not found a line is written and program continues
+    //hardcoded command name. Of course, this command must exist!!!
+    FILE *commandFile;
+	const int BUFSIZE = 1000;
+	char buf[ BUFSIZE ];
+	std::string command="exrex -r ";
+	std::string popenCommand=command+pcreString;
+	if(verbose){
+		printf("INFO: Command for pcre string generation: %s\n",popenCommand.c_str());
+	}
+	commandFile = popen( popenCommand.c_str(), "r" );
+	if ( commandFile == NULL ) {
+		fprintf( stderr, "Could not execute command %s to generate regex payload.\n",popenCommand.c_str() );
+		exit(-1);
+	}
+	//write result to buf
+	while( fgets( buf, BUFSIZE,  commandFile )) {
+		//fprintf( stdout, "%s", buf  );
+	}
+	std::string pcrePayload=buf;
+	pclose( commandFile );
+	return pcrePayload;
 }
 /**
  * sends an HTTP request to the given host containing the pattern(s) of the given rule
@@ -902,18 +1065,15 @@ void sendRulePacket(snortRule* rule, std::string host,bool verbose){
     //using easy interface, no need for simultaneous transfers
     handle = curl_easy_init();
     CURLcode result;
-
     std::string hostUri="";
     std::string cookies="";
     //we generally add 6 chars to the client body because
     //Snort does not do any pattern matching if there are less than 6 chars
     std::string clientBody="12345";
-    FILE *commandFile;
-	const int BUFSIZE = 1000;
-	char buf[ BUFSIZE ];
 	//list for custom headers, here we put the sid number to correlate the request with a rule and additional http_header fields
 	struct curl_slist *header=NULL;
 	long httpResponseCode=0;
+	std::string pcrePayload;
 
 
     if(verbose){
@@ -995,25 +1155,21 @@ void sendRulePacket(snortRule* rule, std::string host,bool verbose){
 			}
     	}
     }
-    //pcre payload generation with the help of an external perl script. This script MUST be present in the same folder as this executable file.
     for(int k=0;k<rule->body.pcre.size();k++){
-    	//the problem with negated pcre is that also modifiers are negated, meaning U means everything BUT http uri...
     	if(rule->body.negatedPcre.at(k)==true){
     		//skip pcre because pcre is negated (and hope it is not generated by accident before)
     	}else{
 			//we dont have to care about nocasePcre because chars will be generated exactly how given in pcre...
-			    //hardcoded command name. Of course, this command must exist!!!
-				std::string command="exrex -r ";
-				std::string commandArgument=rule->body.pcre.at(k);
+				std::string pcreString=rule->body.pcre.at(k);
 				//remove newline chars in pcre, fgets only reads one line and in most of our cases they are useless anyway
 				std::string::size_type at=0;
 				std::string crlf="\\r\\n";
 				while (true){
-					at=commandArgument.find(crlf,at);
+					at=pcreString.find(crlf,at);
 					if(at!= std::string::npos){
 						//do not remove \r\n if it is negated
-						if(commandArgument.at(at-1)!='^'){
-							commandArgument.erase(at, crlf.length());
+						if(pcreString.at(at-1)!='^'){
+							pcreString.erase(at, crlf.length());
 							fprintf(stderr,"WARNING: Removed \\r\\n in pcre for rule sid:%s\n",rule->body.sid.c_str());
 						}else{
 							at=at+crlf.length();
@@ -1023,60 +1179,46 @@ void sendRulePacket(snortRule* rule, std::string host,bool verbose){
 					}
 
 				}
-				//replace non-supported signs:
-				commandArgument=sanitizePCRE(commandArgument, rule->body.sid);
+				//replace non-supported signs and replace stuff that makes problems with equivalent save stuff
+				pcreString=sanitizePCRE(pcreString, rule->body.sid);
 
 				//search for unsupported character classes and warn
-				if(commandArgument.find("\\C")!=std::string::npos||commandArgument.find("\\D")!=std::string::npos||commandArgument.find("\\h")!=std::string::npos
-						||commandArgument.find("\\H")!=std::string::npos||commandArgument.find("\\N")!=std::string::npos||commandArgument.find("\\p")!=std::string::npos
-						||commandArgument.find("\\R")!=std::string::npos||commandArgument.find("\\S")!=std::string::npos||commandArgument.find("\\v")!=std::string::npos
-						||commandArgument.find("\\V")!=std::string::npos||commandArgument.find("\\w")!=std::string::npos||commandArgument.find("\\W")!=std::string::npos
-						||commandArgument.find("\\X")!=std::string::npos
+				if(pcreString.find("\\C")!=std::string::npos||pcreString.find("\\D")!=std::string::npos||pcreString.find("\\h")!=std::string::npos
+						||pcreString.find("\\H")!=std::string::npos||pcreString.find("\\N")!=std::string::npos||pcreString.find("\\p")!=std::string::npos
+						||pcreString.find("\\R")!=std::string::npos||pcreString.find("\\S")!=std::string::npos||pcreString.find("\\v")!=std::string::npos
+						||pcreString.find("\\V")!=std::string::npos||pcreString.find("\\w")!=std::string::npos||pcreString.find("\\W")!=std::string::npos
+						||pcreString.find("\\X")!=std::string::npos
 				){
 					fprintf(stderr,"WARNING: The pcre in this rule contains one of the not supported character classes: \\C, \\D, \\h, \\H, \\N, \\p, \\P, \\R, \\S, \\v, \\V, \\w, \\W, \\X. sid:%s\n",rule->body.sid.c_str());
 
 				}
 
 				//search for unsupported quantifiers and warn
-				if(commandArgument.find("?+")!=std::string::npos||commandArgument.find("??")!=std::string::npos||commandArgument.find("*+")!=std::string::npos
-						||commandArgument.find("++")!=std::string::npos
+				if(pcreString.find("?+")!=std::string::npos||pcreString.find("??")!=std::string::npos||pcreString.find("*+")!=std::string::npos
+						||pcreString.find("++")!=std::string::npos
 				){
 					fprintf(stderr,"WARNING: The pcre in this rule contains one of the not supported quantifiers: ?+, ??, *+, ++. sid:%s\n",rule->body.sid.c_str());
 
 				}
 
 				//quote it, if not shell will expand this to nasty stuff
-				commandArgument="\""+commandArgument+"\"";
+				pcreString="\""+pcreString+"\"";
 				//is it ok if whitespaces occur in uri pcres? -->yes it seems so...
-				if((commandArgument.find(' ')!=std::string::npos)&&(rule->body.contentModifierHTTP.at(rule->body.content.size()+k)!=2)){
+				if((pcreString.find(' ')!=std::string::npos)&&(rule->body.contentModifierHTTP.at(rule->body.content.size()+k)!=2)){
 					fprintf(stderr,"WARNING: non-encoded whitespace in non-uri pcre in rule with sid:%s. Could lead to problems with pcre generation engine.\n",rule->body.sid.c_str());
 				}
+				//go!
+				pcrePayload=generateStringFromPCRE(pcreString);
 
-				std::string popenCommand=command+commandArgument;
-				if(verbose){
-					printf("INFO: Command for pcre string generation: %s\n",popenCommand.c_str());
-				}
-
-				//this opens a shell and executes above command (or script), if script is not found a line is written and program continues
-				commandFile = popen( popenCommand.c_str(), "r" );
-				if ( commandFile == NULL ) {
-					fprintf( stderr, "Could not execute command %s to generate regex payload.\n",popenCommand.c_str() );
-					return;
-				}
-				//write result to buf
-				while( fgets( buf, BUFSIZE,  commandFile )) {
-					//fprintf( stdout, "%s", buf  );
-				}
-				std::string pcrePayload=buf;
 				if(pcrePayload==""){
-					fprintf(stderr,"WARNING: pcre engine produced empty pcre for pcre:%s, rule sid:%s\n",commandArgument.c_str(),rule->body.sid.c_str());
+					fprintf(stderr,"WARNING: pcre engine produced empty pcre for pcre:%s, rule sid:%s\n",pcreString.c_str(),rule->body.sid.c_str());
 				}
 				//strange newlines are introduced, remove them
 				pcrePayload.erase(std::remove(pcrePayload.begin(), pcrePayload.end(), '\n'), pcrePayload.end());
 				pcrePayload.erase(std::remove(pcrePayload.begin(), pcrePayload.end(), '\r'), pcrePayload.end());
 				//libcurl does not like # sign, remove it:
 				pcrePayload.erase(std::remove(pcrePayload.begin(), pcrePayload.end(), '#'), pcrePayload.end());
-				pclose( commandFile );
+
 
 				switch(rule->body.contentModifierHTTP.at(rule->body.content.size()+k)){
 					case 1:{//http_method
@@ -1092,11 +1234,13 @@ void sendRulePacket(snortRule* rule, std::string host,bool verbose){
 					}
 					case 2://http_uri
 					case 3://http_raw_uri
-							{	if(pcrePayload.find("//")!=std::string::npos){
+							{
+
+								if(pcrePayload.find("//")!=std::string::npos){
 								fprintf(stderr,"WARNING: The pcre HTTP uri used for this rule contains multiple slashes. Make sure that your IDS config does not normalize them. sid: %s\n",rule->body.sid.c_str());
 								}
+							    //check for whitespace, if at least one found, replace them all with +, which is http conform and  while ' ' in uri is not...
 								for(uint32_t i=0;i<pcrePayload.length();i++){
-									//check for whitespace, if at least one found, replace them all with +, which is http conform and  while ' ' in uri is not...
 									if(pcrePayload.at(i)==' '){
 										std::replace( pcrePayload.begin(), pcrePayload.end(), ' ', '+');
 									}
