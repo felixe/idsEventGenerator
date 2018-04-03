@@ -1296,7 +1296,9 @@ void sendRulePacket(snortRule* rule, std::string host,bool verbose){
     //prepend host to uri as libcurl does not
     hostUri.insert(0,host);
     //set cookies
-	curl_easy_setopt(handle, CURLOPT_COOKIE, cookies.c_str());
+    if(cookies!=""){
+    	curl_easy_setopt(handle, CURLOPT_COOKIE, cookies.c_str());
+    }
 	std::string content="Rulesid: ";
 	content=content+rule->body.sid.c_str();
 	//add custom headers from above NOTE: do not append crlf at the end, is done automatically
