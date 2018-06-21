@@ -1,3 +1,4 @@
+idsEventGenerator, a.k.a GENESIDS
 
 Reads rules written in a Snort like syntax (as of Snort 2.9.11) from a rule file, puts parsed rule content in a struct and (optionally) prints the rule. 
 It than (optionally) constructs HTTP requests that are sent to the configured host (possibly a webserver) that trigger events on a listening IDS related to the parsed rules.
@@ -22,3 +23,7 @@ ISSUES:
 -libcurl reports a timeout error if an HTTP HEAD request is sent although the request is sent and a response is received. BEWARE: The more likely cause for this error is that the Webserver at the given IP-address is not responding or down or IP is wrong.
 -If you see a python "Traceback" error in your stderr than it means that the exrex command hat problems parsing/generating/... the regex from the given rule.
 
+For more into depth info refer to the paper:
+"How to Test an IDS? GENESIDS: An Automated System for Generating Attack Traffic"
+Proceedings of ACM SIGCOMM 2018, Workshop on Traffic Measurements for Cybersecurity (WTMC 2018)
+http://www.ccs-labs.org/bib/erlacher2018genesids/
