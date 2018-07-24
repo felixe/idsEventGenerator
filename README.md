@@ -9,7 +9,7 @@ It only parses rules that use one of the following content modifiers: http\_\[me
 It ignores rules that are not triggering an alert or do not contain the 'content' or the 'pcre' or the 'uricontent' keyword or contain any other unsupported content related keyword.
 
 libcurl is needed for compilation.
-Build it by executing "g++ -std=c++11 -lcurl snortRuleParser.cpp"
+Build it by executing "g++ -std=c++11 -lcurl idsEventGenerator.cpp"
 
 For generating Strings out of PCREs it uses the python command exrex.
 Install it with the command "pip exrex", this requires running python and pip environment are (e.g. sudo apt-get install python-pip)

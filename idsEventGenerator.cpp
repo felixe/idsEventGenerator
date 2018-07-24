@@ -1340,7 +1340,7 @@ void usage(std::string progName){
 	std::cerr << "Usage: " << progName << " -f <filename> [option]\n"
 			<< "where filename is a file containing snort rules\n"
 			<< "Options:\n"
-			<< "\t-f,--fileile\t\tPath to file with rules\n"
+			<< "\t-f,--file\t\tPath to file with rules\n"
 			<< "\t-h,--help\t\tShow this help message\n"
 			<< "\t-r,--response\t\tPrint response from server (requires -s)\n"
 			<< "\t-s,--server\t\tSpecify the hostname or ip where crafted packets should be sent to, if not set no packets will be sent\n"
