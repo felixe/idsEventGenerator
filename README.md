@@ -12,7 +12,7 @@ libcurl is needed for compilation.
 Build it by executing "g++ -std=c++11 -lcurl idsEventGenerator.cpp"
 
 For generating Strings out of PCREs it uses the python command exrex.
-Install it with the command "pip exrex", this requires running python and pip environment are (e.g. sudo apt-get install python-pip)
+Install it with the command "pip install exrex", this requires running python and pip environment are (e.g. sudo apt-get install python-pip)
 
 Run it by executing "./a.out -f \<snortRuleFile\> -s \<webserver\>"
 or "./a.out -h" to see more options.
